@@ -105,8 +105,8 @@ def _default_config() -> dict[str, Any]:
         "api_timeout": DEFAULT_API_TIMEOUT,
         "synthesis_timeout": DEFAULT_SYNTHESIS_TIMEOUT,
         # off = legacy v1 hook (raw transcript); best_effort/required = checkpoint API v2
-        # (host-normalized evidence_messages). "required" only matters with
-        # compression.checkpoint_required in config.yaml (P6).
+        # (host-normalized evidence_messages), identical in the plugin: fail-closed is
+        # requested per call by the host (compression.checkpoint_required → require_checkpoint).
         "checkpoint_mode": DEFAULT_CHECKPOINT_MODE,
         "checkpoint_budget_s": DEFAULT_CHECKPOINT_BUDGET_S,
         # P3: transcript chain head → manifest → parts (needs checkpoint_mode != off)
