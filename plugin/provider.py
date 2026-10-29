@@ -6,7 +6,9 @@ Threading contract: the MemoryManager already runs ``prefetch()`` on a
 daemon thread with an 8s budget and ``queue_prefetch()``/``sync_turn()`` on
 a background worker, so network calls here are bounded and never block the
 conversation loop. Writes (mirror, pre-compress, session digest) additionally
-spawn their own daemon thread via ``_spawn_write()``.
+spawn their own daemon thread via ``_spawn_write()``. Every thread/timer this
+provider starts carries the spawner's contextvars (host ``spawn_context_thread``
+/ ``ctx_bound``), so profile isolation holds on multiplexed gateways.
 
 Design notes:
 - ``sync_turn`` is deliberately NOT a raw turn dump — CTX blocks should be
@@ -19,9 +21,9 @@ Design notes:
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,6 +42,7 @@ from .config import (
     FactLedger,
     derive_profile_name,
     derive_title,
+    env_secret,
     extract_salient_facts,
     fact_keys,
     load_ctx_config,
@@ -48,6 +51,30 @@ from .config import (
     save_ctx_config,
     shorten,
 )
+
+# Host features newer than the MemoryProvider ABC itself; older hosts get plain fallbacks.
+try:  # profile multiplexing: background work must run under the spawner's contextvars
+    from agent.memory_provider import ctx_bound, spawn_context_thread
+except ImportError:  # pragma: no cover - depends on the host version
+
+    def ctx_bound(fn: Callable[..., Any]) -> Callable[..., Any]:
+        return fn
+
+    def spawn_context_thread(
+        target: Callable[..., Any],
+        *,
+        name: str,
+        daemon: bool = True,
+        args: tuple = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> threading.Thread:
+        return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
+
+
+try:  # deterministic recall indicator ("🧠 CTX — recalled 3 memories")
+    from agent.memory_provider import RecallStatus
+except ImportError:  # pragma: no cover - depends on the host version
+    RecallStatus = None
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +100,7 @@ def _count_noise_rows(messages: list[dict[str, Any]]) -> tuple:
             continue
         if m.get("role") == "tool" or m.get("tool_calls"):
             tools += 1
-        content = m.get("content")
-        text = content if isinstance(content, str) else ""
-        if m.get("_compressed_summary") or text.lstrip().startswith(("[CONTEXT COMPACTION", "[PRIOR CONTEXT")):
+        if _dg.is_carrier(m):
             carriers += 1
     return carriers, tools
 
@@ -93,9 +118,10 @@ class CtxMemoryProvider(MemoryProvider):
         self._whoami_label = ""
         self._active = False
         self._write_enabled = True
-        # prefetch pre-warm cache: (query, context, monotonic_ts)
+        # prefetch pre-warm cache: (query, context, hit count, monotonic_ts)
         self._prefetch_cache: tuple | None = None
         self._prefetch_lock = threading.Lock()
+        self._last_recall_count = 0  # hits injected by the most recent prefetch()
         self._queue_thread: threading.Thread | None = None
         self._write_thread: threading.Thread | None = None
         # P3 transcript chain state (upstream ctx_checkpoint :292-336)
@@ -132,17 +158,21 @@ class CtxMemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         """Env/config presence only — NO network calls."""
-        if not os.environ.get("CTX_KEY", "").strip():
-            return False
-        if os.environ.get("CTX_BASE_URL", "").strip():
-            return True
         try:
+            if not env_secret("CTX_KEY"):
+                return False
+            if env_secret("CTX_BASE_URL"):
+                return True
             from hermes_constants import get_hermes_home
 
             cfg = load_ctx_config(str(get_hermes_home()))
             return bool(cfg.get("ctx_base_url", "").strip())
         except Exception:
             return False
+
+    def unavailable_reason(self) -> str:
+        """Hint for the host's "provider unavailable" warning (``initialize()`` never runs then)."""
+        return "set CTX_KEY in .env and CTX_BASE_URL (env or ctx_base_url in ctx.json) — `hermes memory setup`"
 
     # -- Config (hermes memory setup) ----------------------------------------
 
@@ -170,17 +200,17 @@ class CtxMemoryProvider(MemoryProvider):
 
     def get_status_config(self, provider_config: dict) -> dict:
         """Feeds ``hermes memory status``. Must not raise."""
-        from hermes_constants import get_hermes_home
+        status: dict[str, Any] = {"summary": "✗ CTX not configured (set CTX_BASE_URL and CTX_KEY)", "ok": False}
+        try:
+            from hermes_constants import get_hermes_home
 
-        hermes_home = str(get_hermes_home())
-        cfg = load_ctx_config(hermes_home)
-        base = resolve_base_url(str(cfg.get("ctx_base_url") or (provider_config or {}).get("ctx_base_url") or ""))
-        api_key = os.environ.get("CTX_KEY", "").strip()
-        status: dict[str, Any] = {
-            "summary": "✗ CTX not configured (set CTX_BASE_URL and CTX_KEY)",
-            "ok": False,
-            "base_url": base,
-        }
+            cfg = load_ctx_config(str(get_hermes_home()))
+            fallback = cfg.get("ctx_base_url") or (provider_config or {}).get("ctx_base_url") or ""
+            base = status["base_url"] = resolve_base_url(str(fallback))
+            api_key = env_secret("CTX_KEY")
+        except Exception as exc:
+            status["summary"] = f"✗ CTX config unreadable: {shorten(str(exc), 140)}"
+            return status
         if not (api_key and base):
             return status
         try:
@@ -231,11 +261,9 @@ class CtxMemoryProvider(MemoryProvider):
                 )
                 self._root_session_id = lineage_root
         self._prune_state_once()
-        self._api_key = os.environ.get("CTX_KEY", "").strip()
+        self._api_key = env_secret("CTX_KEY")
         self._base_url = resolve_base_url(self._config.get("ctx_base_url"))
-
-        agent_context = kwargs.get("agent_context", "")
-        self._write_enabled = agent_context not in {"cron", "flush", "subagent"}
+        self._write_enabled = self._agent_context not in {"cron", "flush", "subagent"}
 
         self._active = bool(self._api_key and self._base_url)
         if not self._active:
@@ -357,6 +385,7 @@ class CtxMemoryProvider(MemoryProvider):
         Runs inside the MemoryManager's daemon thread (8s budget). Consumes a
         fresh pre-warmed cache entry when available, otherwise queries now.
         """
+        self._last_recall_count = 0
         if not self._active or not self._config.get("auto_recall", True) or not self._client:
             return ""
         q = (query or "").strip()
@@ -364,14 +393,22 @@ class CtxMemoryProvider(MemoryProvider):
             return ""
         with self._prefetch_lock:
             cached = self._prefetch_cache
-            if cached and cached[0] == q and (time.monotonic() - cached[2]) < _PREFETCH_CACHE_TTL_S:
+            if cached and cached[0] == q and (time.monotonic() - cached[3]) < _PREFETCH_CACHE_TTL_S:
                 self._prefetch_cache = None
+                self._last_recall_count = cached[2]
                 return cached[1]
         try:
-            return self._recall(q)
+            context, self._last_recall_count = self._recall(q)
+            return context
         except Exception as exc:
             logger.debug("CTX prefetch failed (non-fatal): %s", exc)
             return ""
+
+    def recall_status(self):
+        """What the most recent :meth:`prefetch` injected (host recall indicator); None = nothing."""
+        if RecallStatus is None or self._last_recall_count <= 0:
+            return None
+        return RecallStatus(provider_label="CTX", count=self._last_recall_count)
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Pre-warm the recall cache for the next turn (background worker)."""
@@ -383,26 +420,26 @@ class CtxMemoryProvider(MemoryProvider):
 
         def _warm() -> None:
             try:
-                ctx = self._recall(q)
+                context, count = self._recall(q)
                 with self._prefetch_lock:
-                    self._prefetch_cache = (q, ctx, time.monotonic())
-            except Exception:
-                pass
+                    self._prefetch_cache = (q, context, count, time.monotonic())
+            except Exception as exc:
+                logger.debug("CTX prefetch warm-up failed (non-fatal): %s", exc)
 
         if self._queue_thread and self._queue_thread.is_alive():
             self._queue_thread.join(timeout=2.0)
-        self._queue_thread = threading.Thread(target=_warm, daemon=True, name="ctx-prefetch-warm")
+        self._queue_thread = spawn_context_thread(_warm, name="ctx-prefetch-warm")
         self._queue_thread.start()
 
     def _types_exclude(self) -> list[str]:
         return list(self._config.get("prefetch_types_exclude") or [])
 
-    def _recall(self, text: str) -> str:
-        """Retrieval-only recall. Query path with search fallback (embedding
-        backfill can make /api/query time out right after stores). Both paths
-        send ``types_exclude`` (P2: checkpoints are browseable on /api/search)."""
+    def _recall(self, text: str) -> tuple[str, int]:
+        """Retrieval-only recall → ``(context block, hit count)``. Query path with search
+        fallback (embedding backfill can make /api/query time out right after stores). Both
+        paths send ``types_exclude`` (P2: checkpoints are browseable on /api/search)."""
         if not self._client:
-            return ""
+            return "", 0
         types_exclude = self._types_exclude()
         if self._config.get("prefetch_mode") == "search":
             return self._format_search_results(self._client.search(text, types_exclude=types_exclude))
@@ -412,12 +449,12 @@ class CtxMemoryProvider(MemoryProvider):
                 sources = data.get("sources") or []
                 if sources:
                     return self._format_sources(sources)
-            return ""
+            return "", 0
         except Exception:
             try:
                 return self._format_search_results(self._client.search(text, types_exclude=types_exclude))
             except Exception:
-                return ""
+                return "", 0
 
     def _prefetch_items(self, items: list[dict[str, Any]]) -> list[str]:
         """Render hits as bullet lines. Defense in depth: hits whose ``type`` is in
@@ -460,24 +497,26 @@ class CtxMemoryProvider(MemoryProvider):
             )
         return f"{_CONTEXT_TAG}\n{intro}\n\n" + "\n\n".join(parts) + f"\n</{_CONTEXT_TAG.lstrip('<')}>"
 
-    def _format_sources(self, sources: list[dict[str, Any]]) -> str:
+    def _format_sources(self, sources: list[dict[str, Any]]) -> tuple[str, int]:
         intro = (
             "Relevant knowledge from CTX long-term memory. Use silently when relevant; "
             "do not force it into the conversation."
         )
-        return self._wrap_context(self._prefetch_items(sources or []), intro)
+        parts = self._prefetch_items(sources or [])
+        return self._wrap_context(parts, intro), len(parts)
 
-    def _format_search_results(self, data: dict[str, Any]) -> str:
+    def _format_search_results(self, data: dict[str, Any]) -> tuple[str, int]:
         results = (data or {}).get("results") or []
         intro = "Relevant knowledge from CTX long-term memory (lightweight search). Use silently when relevant."
-        return self._wrap_context(self._prefetch_items(results), intro)
+        parts = self._prefetch_items(results)
+        return self._wrap_context(parts, intro), len(parts)
 
     # -- Auto-write hooks --------------------------------------------------------
 
-    def _spawn_write(self, target) -> None:
+    def _spawn_write(self, target: Callable[[], None]) -> None:
         if self._write_thread and self._write_thread.is_alive():
             self._write_thread.join(timeout=2.0)
-        self._write_thread = threading.Thread(target=target, daemon=True, name="ctx-write")
+        self._write_thread = spawn_context_thread(target, name="ctx-write")
         self._write_thread.start()
 
     def _auto_store(
@@ -988,7 +1027,7 @@ class CtxMemoryProvider(MemoryProvider):
         with self._idle_lock:
             if self._idle_timer is not None:
                 self._idle_timer.cancel()
-            timer = threading.Timer(minutes * 60.0, self._on_idle, args=(snapshot, root))
+            timer = threading.Timer(minutes * 60.0, ctx_bound(self._on_idle), args=(snapshot, root))
             timer.daemon = True
             timer.name = "ctx-idle-digest"
             self._idle_timer = timer

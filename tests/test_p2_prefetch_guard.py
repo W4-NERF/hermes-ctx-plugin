@@ -214,6 +214,19 @@ def test_client_rejects_provenance_metadata_without_request(wire):
     assert ei.value.code == "reserved_metadata" and sent == []
 
 
+def test_wire_get_block_top_level_id_with_legacy_fallback(wire):
+    sent, plan = wire
+    client = CtxClient("http://ctx.invalid", "k")
+    client.get_block("b1")
+    assert sent[-1]["url"].endswith("/api/manage") and sent[-1]["body"] == {"action": "get", "id": "b1"}
+    plan["responses"] = [
+        _http_error(400, {"success": False, "error": "Missing required field: id"}),
+        {"success": True, "block": {"id": "b2"}},
+    ]
+    out = client.get_block("b2")
+    assert sent[-1]["body"] == {"action": "get", "data": {"id": "b2"}} and out["block"]["id"] == "b2"
+
+
 def test_reject_vocabulary_matches_server():
     for code in (
         "reserved_category",

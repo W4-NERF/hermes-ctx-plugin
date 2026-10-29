@@ -1,7 +1,11 @@
 """CTX memory provider plugin — configuration handling.
 
-Reads/writes ``$HERMES_HOME/ctx.json`` (profile-scoped, non-secret settings)
-and resolves the API base URL. Secrets stay in ``.env`` (``CTX_KEY``).
+Reads/writes ``$HERMES_HOME/ctx.json`` (profile-scoped, non-secret settings),
+resolves the API base URL and holds the shared text helpers, provenance tags and
+the pre-compress fact heuristics. Secrets stay in ``.env`` (``CTX_KEY``).
+
+Stdlib only at import time — ``cli.py`` imports it during argparse setup, before
+the provider (and the host's ``agent`` package) is loaded.
 """
 
 from __future__ import annotations
@@ -62,11 +66,10 @@ CATEGORY_DIGEST = "agent-briefing"  # session-end digests
 # Saliency heuristic thresholds (on_pre_compress)
 SALIENT_MIN_LEN = 60
 SALIENT_MAX_FACTS = 5
-# P4: cross-compaction fact dedupe ledger ($HERMES_HOME/ctx_state/<root>.json) and the
-# cumulative ``fact_hashes`` list carried in chain head/manifest metadata.
+# P4: cross-compaction fact dedupe ledger ($HERMES_HOME/ctx_state/<root>.json). The
+# cumulative ``fact_hashes`` list in chain head/manifest metadata lives in checkpoint.py.
 FACT_STATE_DIR = "ctx_state"
 FACT_LEDGER_MAX = 500  # keys per root (FIFO)
-FACT_HASHES_META_MAX = 200  # keys in chain metadata (newest kept)
 
 # P5: session digests per segment. Plan thresholds: ≥ 4 exchanges since the last digest,
 # rolling digest after 40 exchanges or 6 h; idle digest after 6 h without a turn.
@@ -235,10 +238,24 @@ def save_ctx_config(values: dict[str, Any], hermes_home: str) -> None:
             pass
 
 
+def env_secret(name: str) -> str:
+    """Profile-scoped env/credential lookup (``CTX_KEY``, ``CTX_BASE_URL``).
+
+    Uses the host's ``agent.secret_scope.get_secret`` so a multiplexed gateway reads the
+    active profile's ``.env`` instead of the process environment; hosts without it fall
+    back to ``os.environ``. An unscoped read under multiplexing raises (host contract:
+    swallowing it would hide a spawn-site bug) — callers that must not raise catch it.
+    """
+    try:
+        from agent.secret_scope import get_secret
+    except ImportError:
+        return os.environ.get(name, "").strip()
+    return str(get_secret(name, "") or "").strip()
+
+
 def resolve_base_url(config_value: str = "") -> str:
-    """Env CTX_BASE_URL wins; falls back to ctx.json value."""
-    env = os.environ.get("CTX_BASE_URL", "").strip()
-    raw = env or str(config_value or "").strip()
+    """Env ``CTX_BASE_URL`` wins; falls back to the ctx.json value."""
+    raw = env_secret("CTX_BASE_URL") or str(config_value or "").strip()
     return raw.rstrip("/")
 
 
@@ -274,11 +291,11 @@ def _as_bool(value: Any, default: bool) -> bool:
 # ---------------------------------------------------------------------------
 # Every profile writes with the same CTX key, so blocks were not attributable to
 # a profile. All plugin writes now carry ``source:hermes``, ``profile:<name>``
-# and ``hook:<origin>``. Tags are sent on EVERY store because a CTX upsert
-# without ``tags`` resets the block's tags to [].
+# and ``hook:<origin>`` (memory_write, pre_compress, checkpoint, session_end,
+# digest_rolling, digest_idle, tool, cli). Tags are sent on EVERY store because a
+# CTX upsert without ``tags`` resets the block's tags to [].
 
 ORIGIN_SOURCE = "hermes"
-VALID_HOOKS = ("memory_write", "pre_compress", "session_end", "tool")
 # Agent-supplied tags with these prefixes are dropped — provenance must not be spoofable.
 _RESERVED_TAG_PREFIXES = ("source:", "profile:", "hook:")
 _MAX_TAG_LEN = 64
@@ -354,11 +371,11 @@ def shorten(text: str, max_len: int) -> str:
 # ---------------------------------------------------------------------------
 # Noise filter for pre-compress extraction (added 2026-09-24)
 # ---------------------------------------------------------------------------
-# Background: this provider is a v1 pre-compress provider, so the host hands it
-# the RAW transcript (agent/memory_manager.py on_pre_compress: evidence_messages
-# only go to checkpoint-API v2 providers). That transcript contains compaction
-# summary carriers, harness wrappers and assistant narration, which
-# extract_salient_facts() used to store verbatim as ``learnings/fact: …``.
+# Background: with ``checkpoint_mode: off`` (legacy v1 hook) the host hands over the
+# RAW transcript; since checkpoint API v2 it hands over normalized ``evidence_messages``.
+# Both still contain compaction summary carriers (v1), harness/gateway wrappers and
+# assistant narration, which extract_salient_facts() used to store verbatim as
+# ``learnings/fact: …``.
 
 # agent/context_compressor.py COMPRESSED_SUMMARY_METADATA_KEY
 COMPRESSED_SUMMARY_KEY = "_compressed_summary"

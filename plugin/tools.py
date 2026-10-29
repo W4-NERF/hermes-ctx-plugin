@@ -13,7 +13,14 @@ from typing import Any
 
 from tools.registry import tool_error
 
-from .client import RESERVED_METADATA_KEYS, CtxApiError, response_code, store_action, store_block_id
+from .client import (
+    RESERVED_METADATA_KEYS,
+    RETRYABLE_CODES,
+    CtxApiError,
+    response_code,
+    store_action,
+    store_block_id,
+)
 from .config import DEFAULT_SENSITIVITY, UNTRUSTED_LABEL, VALID_SENSITIVITIES, merge_tags, shorten
 
 logger = logging.getLogger(__name__)
@@ -280,19 +287,20 @@ def _tool_store(provider, args: dict[str, Any]) -> str:
             code or "-",
             shorten(str(data.get("error") or "unknown error"), 200),
         )
+        message = f"CTX store failed: {data.get('error') or 'unknown error'}"
         if code:
-            return tool_error(f"CTX store failed: {data.get('error') or 'unknown error'}", code=code)
-        return tool_error(f"CTX store failed: {data.get('error') or 'unknown error'}")
+            return tool_error(message, code=code, retryable=code in RETRYABLE_CODES)
+        return tool_error(message)
+    block_id = store_block_id(data)
     logger.info(
         "CTX tool store %s (profile=%s, %s/%s, id=%s)",
         store_action(data),
-        getattr(provider, "_profile", "default"),
+        profile,
         category,
         shorten(title, 80),
-        store_block_id(data) or "?",
+        block_id or "?",
     )
     result: dict[str, Any] = {"saved": True, "category": category, "title": title}
-    block_id = store_block_id(data)
     if block_id:
         result["id"] = block_id
     return json.dumps(result, ensure_ascii=False)

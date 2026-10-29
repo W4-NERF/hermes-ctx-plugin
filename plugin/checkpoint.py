@@ -37,7 +37,7 @@ from .client import CtxApiError, response_code, store_block_id
 
 logger = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.6.2"
+PLUGIN_VERSION = "1.7.0"  # keep in sync with plugin.yaml (tests/test_host_contract.py)
 UPSTREAM_REF = "GottZ/ctx integrations/hermes/plugin/ctx_checkpoint 0.4.3 @ 38fdb74 (MPL-2.0)"
 
 CATEGORY_CHECKPOINT = "compaction-checkpoints"
@@ -67,9 +67,11 @@ MAX_PARTS_CEILING = 95
 # Backoff after a 429 that survived the client's own 1 s retry (seconds, bounded by the budget).
 RATE_LIMIT_BACKOFF_S = (2.0, 4.0, 8.0)
 
+# The value may start with an auth scheme ("Authorization: Bearer <token>"): without the
+# optional scheme group only the scheme word would be masked and the credential would stay.
 _GENERIC_SECRET_RE = re.compile(
     r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|"
-    r"password|passwd|authorization)\b(\s*[:=]\s*)([^\s,;]+)"
+    r"password|passwd|authorization)\b(\s*[:=]\s*)((?:(?:bearer|basic|digest)\s+)?[^\s,;]+)"
 )
 _BEARER_RE = re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/-]{8,}=*")
 
@@ -292,6 +294,7 @@ def _find_str_list(value: Any, key: str) -> list[str]:
 
 
 def _merge_hashes(previous: list[str], new: list[str], cap: int = FACT_HASHES_META_MAX) -> list[str]:
+    """Order-preserving union (previous first), newest ``cap`` kept."""
     merged: list[str] = []
     seen = set()
     for item in list(previous or []) + list(new or []):
@@ -318,9 +321,13 @@ def _find_block_id_by_title(value: Any, title: str) -> str | None:
     return None
 
 
+def _short_root(root_session_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", root_session_id)[:48]
+
+
 def head_title_for(root_session_id: str) -> str:
-    short_root = re.sub(r"[^A-Za-z0-9_.-]", "_", root_session_id)[:48]
-    return f"Compaction checkpoint head {short_root}"
+    """Stable head title per root session (server classifies it as ``checkpoint``, M120)."""
+    return f"Compaction checkpoint head {_short_root(root_session_id)}"
 
 
 # -- Chain writer ----------------------------------------------------------------------
@@ -453,17 +460,15 @@ class ChainWriter:
             raise CtxCheckpointError(f"ctx checkpoint {what}: store returned no block id")
         return block_id
 
-    def load_previous_manifest_id(
-        self, head_title: str, deadline: float, budget_s: float, stats: dict[str, int]
-    ) -> str | None:
-        """Server lookup (upstream ``_load_previous_manifest_id``): search head by title, read
-        ``latest_manifest_id``. None = no head yet. Head without a valid manifest id → error."""
-        return self.load_previous_head(head_title, deadline, budget_s, stats)[0]
-
     def load_previous_head(
         self, head_title: str, deadline: float, budget_s: float, stats: dict[str, int]
     ) -> tuple[str | None, list[str]]:
-        """``(latest_manifest_id, fact_hashes)`` of the existing head (P4: same single read)."""
+        """``(latest_manifest_id, fact_hashes)`` of the existing head (upstream
+        ``_load_previous_manifest_id`` plus the P4 dedupe keys from the same read).
+
+        Searches the head by title and reads it. ``(None, [])`` = no head yet; a head
+        without a valid ``latest_manifest_id`` raises ``CtxCheckpointError``.
+        """
         result = self._call(
             "head search",
             deadline,
@@ -548,8 +553,8 @@ class ChainWriter:
 
         now = datetime.now(timezone.utc).isoformat()
         root = root_session_id or session_id or "unknown"
-        short_root = re.sub(r"[^A-Za-z0-9_.-]", "_", root)[:48]
-        head_title = f"Compaction checkpoint head {short_root}"
+        short_root = _short_root(root)
+        head_title = head_title_for(root)
         stats: dict[str, int] = {"writes": 0, "rate_limited": 0}
         previous_manifest_id, previous_fact_hashes = self.load_previous_head(head_title, deadline, budget_s, stats)
         # P4: cumulative fact dedupe keys (previous head ∪ this run), newest kept, capped
