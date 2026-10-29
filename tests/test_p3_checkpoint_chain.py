@@ -618,7 +618,7 @@ def test_budget_shared_with_required_facts(factory):
     p, c = factory("sess-budget2", config={"auto_compress_extract": True}, agent_context="primary")
     p._config["checkpoint_budget_s"] = 0.0
     with pytest.raises(CtxCheckpointError):
-        p.on_pre_compress([{"role": "user", "content": "Der Proxy auf HOST-WWW terminiert TLS fuer alle Dienste mit Traefik."}],
+        p.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}],
                           require_checkpoint=True)
     assert _stores(c.calls) == []
 
@@ -702,7 +702,7 @@ def test_checkpoint_chain_switch_independent_of_facts(factory):
     # chain off, facts on → no chain traffic at all
     p2, c2 = factory("sess-dev2", config={"checkpoint_chain": False, "auto_compress_extract": True},
                      agent_context="primary")
-    p2.on_pre_compress([{"role": "user", "content": "Der Proxy auf HOST-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
+    p2.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
     p2.shutdown()
     assert all(a["category"] != CHAIN_CAT for a in _stores(c2.calls))
     assert not any(n == "search" for n, _ in c2.calls)
@@ -728,19 +728,38 @@ def test_best_effort_chain_failure_keeps_facts(factory, caplog):
 
     c.store_hook = hook
     with caplog.at_level(logging.WARNING, logger="ctx_plugin.provider"):
-        out = p.on_pre_compress([{"role": "user", "content": "Der Proxy auf HOST-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
+        out = p.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
     p.shutdown()
     assert "Facts extracted" in out and "ctx checkpoint head" not in out
     assert any(a["category"] == "learnings" for a in _stores(c.calls))
     assert any("chain failed" in r.getMessage() for r in caplog.records)
 
 
-def test_empty_evidence_best_effort_silent_required_raises(factory):
+def test_empty_evidence_noop_receipt_no_writes(factory):
+    # P6 deviation: upstream raises on empty direct evidence; we return a no-op
+    # receipt so fail-closed (compression.checkpoint_required) never blocks a
+    # compaction that has nothing to archive. Nothing is written either way.
     p, c = factory("sess-empty", agent_context="primary")
-    assert p.on_pre_compress([{"role": "tool", "content": "only tool"}]) == ""
-    with pytest.raises(CtxCheckpointError, match="no direct"):
-        p.on_pre_compress([{"role": "tool", "content": "only tool"}], require_checkpoint=True)
+    out = p.on_pre_compress([{"role": "tool", "content": "only tool"}], require_checkpoint=True)
+    assert "empty" in out and "nothing to archive" in out
     assert c.calls == []
+
+
+def test_chaos_ctx_down_required_blocks_compaction(factory):
+    # P6 chaos test: CTX unreachable during a required checkpoint must raise
+    # (the host then blocks compaction with BLOCKED_MISSING_PREREQUISITE and
+    # keeps the uncompressed transcript) and must not publish a head.
+    p, c = factory("sess-chaos", agent_context="primary")
+    def _boom(args):
+        raise ConnectionError("CTX unreachable (chaos test)")
+    c.store_hook = _boom
+    msgs = [{"role": "user", "content": "Wichtige Anweisung"},
+            {"role": "assistant", "content": "Erledigt."}]
+    with pytest.raises(CtxCheckpointError, match="failed: ConnectionError"):
+        p.on_pre_compress(msgs, require_checkpoint=True)
+    # the failing part store was attempted, but no manifest/head was published
+    stores = [x for x in c.calls if x[0] == "store"]
+    assert len(stores) == 1 and "source" in stores[0][1]["title"]
 
 
 def test_required_receipt_contains_chain_and_facts_and_stays_under_host_cap(factory):

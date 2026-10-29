@@ -332,6 +332,9 @@ class ChainReceipt:
 
     def frame(self) -> str:
         """Upstream receipt text (bounded, < 1000 chars; part IDs deliberately omitted)."""
+        if not self.head_id:
+            return ("ctx checkpoint: empty (no direct user/assistant evidence — "
+                    "nothing to archive)")
         return (
             f"ctx checkpoint head: `{self.head_id}`\n"
             f"ctx checkpoint manifest: `{self.manifest_id}`\n"
@@ -461,7 +464,14 @@ class ChainWriter:
 
         rendered = render_direct_evidence(messages)
         if not rendered:
-            raise CtxCheckpointError("ctx checkpoint has no direct user/assistant source evidence")
+            # P6: nothing to archive — no direct user/assistant text means the
+            # lossy summary has nothing to discard. Upstream raises
+            # CtxCheckpointError here; under compression.checkpoint_required
+            # that would block compaction for nothing. Return a no-op receipt
+            # instead: success, nothing written (deviation, documented in README).
+            return ChainReceipt(head_id="", manifest_id="", part_ids=[], sha256="",
+                                parent_manifest_id=None, checkpoint_id="", writes=0,
+                                duration_s=self.monotonic() - started, lookup="none")
         digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
         chunks = split_chunks(rendered, self.chunk_chars)
         max_parts = max(1, min(int(self.max_parts), MAX_PARTS_CEILING))
