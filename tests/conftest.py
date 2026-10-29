@@ -12,6 +12,7 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -41,14 +42,14 @@ _load_plugin()
 class FakeClient:
     """Stands in for CtxClient. ``fail_on`` = set of 0-based store-call indices that raise."""
 
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(self, base_url="", api_key="", timeout=10.0, synthesis_timeout=90.0, **_kw):
         self.calls: list = []
         self.fail_on: set = set()
         self.reject_on: set = set()
         self.raise_on_store = None  # exception instance raised by every store()
-        self.reads: list = []       # ("query"|"search", text, kwargs)
+        self.reads: list = []  # ("query"|"search", text, kwargs)
         self.query_result = {"success": True, "sources": []}
         self.search_result = {"success": True, "results": []}
         self.query_raises = None
@@ -63,8 +64,14 @@ class FakeClient:
 
     def store(self, category, title, content, sensitivity=None, tags=None, **extra):
         idx = len(self.calls)
-        record = {"category": category, "title": title, "content": content,
-                  "sensitivity": sensitivity, "tags": tags, **extra}
+        record = {
+            "category": category,
+            "title": title,
+            "content": content,
+            "sensitivity": sensitivity,
+            "tags": tags,
+            **extra,
+        }
         if category == "compaction-checkpoints":
             n = len(self.chain_calls)
             self.chain_calls.append(record)
@@ -77,8 +84,10 @@ class FakeClient:
             if idx in self.reject_on:
                 return {"success": False, "error": "simulated rejection"}
             ts = "2026-10-20T00:00:00Z"
-            return {"success": True, "block": {"id": f"019f6000-0000-7000-8000-{900000 + n:012d}",
-                                               "created_at": ts, "updated_at": ts}}
+            return {
+                "success": True,
+                "block": {"id": f"019f6000-0000-7000-8000-{900000 + n:012d}", "created_at": ts, "updated_at": ts},
+            }
         self.calls.append(record)
         if self.raise_on_store is not None:
             raise self.raise_on_store

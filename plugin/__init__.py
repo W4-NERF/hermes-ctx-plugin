@@ -9,9 +9,8 @@ discovery system — activate with ``memory.provider: ctx`` (or
 from __future__ import annotations
 
 from .provider import CtxMemoryProvider
-from .tools import get_tool_schemas, handle_tool_call
 
-__all__ = ["CtxMemoryProvider"]
+__all__ = ["CtxMemoryProvider", "register"]
 
 
 def register(ctx) -> None:

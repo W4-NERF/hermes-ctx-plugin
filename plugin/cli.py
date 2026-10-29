@@ -13,7 +13,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 _CONFIG_FILENAME = "ctx.json"
 _ENTRY_SEPARATOR = "§"
@@ -28,8 +28,8 @@ def _hermes_home() -> Path:
         return Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
 
 
-def _load_config() -> Dict[str, Any]:
-    config: Dict[str, Any] = {}
+def _load_config() -> dict[str, Any]:
+    config: dict[str, Any] = {}
     path = _hermes_home() / _CONFIG_FILENAME
     if path.exists():
         try:
@@ -49,7 +49,7 @@ def _api_key() -> str:
     return os.environ.get("CTX_KEY", "").strip()
 
 
-def _request(method: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: float = 20.0) -> Dict[str, Any]:
+def _request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = 20.0) -> dict[str, Any]:
     url = f"{_base_url()}{path}"
     headers = {
         "X-Context-Key": _api_key(),
@@ -105,7 +105,7 @@ def _derive_title(content: str, max_len: int = 60, prefix: str = "") -> str:
 def cmd_status(args) -> None:
     base = _base_url()
     key = _api_key()
-    print(f"CTX memory plugin — status")
+    print("CTX memory plugin — status")
     print(f"  base URL: {base or '(not set)'}")
     print(f"  key:      {'set' if key else 'NOT set'}")
     if not (base and key):
@@ -113,7 +113,8 @@ def cmd_status(args) -> None:
         return
     info = _request("GET", "/api/whoami", timeout=10.0)
     if info.get("success"):
-        print(f"  ✓ connected · scope: {info.get('home_scope') or '?'} · label: {info.get('label') or '?'} · role: {info.get('role') or '?'}")
+        scope, label, role = info.get("home_scope") or "?", info.get("label") or "?", info.get("role") or "?"
+        print(f"  ✓ connected · scope: {scope} · label: {label} · role: {role}")
     else:
         print(f"  ✗ {info.get('error') or 'whoami failed'}")
     cfg = _load_config()
@@ -141,9 +142,14 @@ def cmd_sync(args) -> None:
         prefix = "memory: " if label == "memory" else "user: "
         for entry in entries:
             resp = _request(
-                "POST", "/api/store",
-                {"category": category, "title": _derive_title(entry, prefix=prefix), "content": entry,
-                 "sensitivity": "personal"},
+                "POST",
+                "/api/store",
+                {
+                    "category": category,
+                    "title": _derive_title(entry, prefix=prefix),
+                    "content": entry,
+                    "sensitivity": "personal",
+                },
                 timeout=15.0,
             )
             if resp.get("success"):
@@ -157,7 +163,8 @@ def cmd_sync(args) -> None:
 
 def cmd_query(args) -> None:
     resp = _request(
-        "POST", "/api/query",
+        "POST",
+        "/api/query",
         {"query": args.text, "synthesize": bool(args.synthesize), "include_content": True},
         timeout=120.0 if args.synthesize else 20.0,
     )
@@ -174,9 +181,14 @@ def cmd_query(args) -> None:
 
 def cmd_store(args) -> None:
     resp = _request(
-        "POST", "/api/store",
-        {"category": args.category, "title": args.title, "content": args.content,
-         "sensitivity": getattr(args, "sensitivity", None) or "personal"},
+        "POST",
+        "/api/store",
+        {
+            "category": args.category,
+            "title": args.title,
+            "content": args.content,
+            "sensitivity": getattr(args, "sensitivity", None) or "personal",
+        },
         timeout=15.0,
     )
     if resp.get("success"):
@@ -186,7 +198,7 @@ def cmd_store(args) -> None:
 
 
 def cmd_search(args) -> None:
-    payload: Dict[str, Any] = {"query": args.text}
+    payload: dict[str, Any] = {"query": args.text}
     if getattr(args, "category", None):
         payload["category"] = args.category
     resp = _request("POST", "/api/search", payload, timeout=15.0)

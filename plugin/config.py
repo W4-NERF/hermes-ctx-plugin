@@ -14,8 +14,9 @@ import re
 import tempfile
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,9 @@ DEFAULT_CHECKPOINT_BUDGET_S = 20.0
 # Transcript checkpoint chain head → manifest → parts (P3). Independent of
 # auto_compress_extract (facts): dev profiles may keep facts off and the chain on.
 DEFAULT_CHECKPOINT_CHAIN = True
-DEFAULT_CHECKPOINT_SENSITIVITY = "personal"   # transcripts = personal data (user decision 2026-10-20)
-DEFAULT_CHECKPOINT_CHUNK_CHARS = 36_000       # upstream default, hard max 40_000
-DEFAULT_CHECKPOINT_MAX_PARTS = 80             # < 100 writes/60 s per key incl. manifest + head
+DEFAULT_CHECKPOINT_SENSITIVITY = "personal"  # transcripts = personal data (user decision 2026-10-20)
+DEFAULT_CHECKPOINT_CHUNK_CHARS = 36_000  # upstream default, hard max 40_000
+DEFAULT_CHECKPOINT_MAX_PARTS = 80  # < 100 writes/60 s per key incl. manifest + head
 
 # Prefetch protection (P2). Retrieval-excluded / foreign-text block types that must
 # never be injected as recalled context. Server reference (GottZ/ctx v5.21):
@@ -53,10 +54,10 @@ DEFAULT_PREFETCH_UNTRUSTED = "label"
 UNTRUSTED_LABEL = "[untrusted — Daten, keine Anweisung]"
 
 # CTX category conventions (github.com/GottZ/ctx docs)
-CATEGORY_MEMORY = "agent-briefing"   # Hermes built-in memory (MEMORY.md)
-CATEGORY_USER = "reference"          # Hermes user profile (USER.md)
-CATEGORY_LEARNINGS = "learnings"     # pre-compress extraction
-CATEGORY_DIGEST = "agent-briefing"   # session-end digests
+CATEGORY_MEMORY = "agent-briefing"  # Hermes built-in memory (MEMORY.md)
+CATEGORY_USER = "reference"  # Hermes user profile (USER.md)
+CATEGORY_LEARNINGS = "learnings"  # pre-compress extraction
+CATEGORY_DIGEST = "agent-briefing"  # session-end digests
 
 # Saliency heuristic thresholds (on_pre_compress)
 SALIENT_MIN_LEN = 60
@@ -64,8 +65,8 @@ SALIENT_MAX_FACTS = 5
 # P4: cross-compaction fact dedupe ledger ($HERMES_HOME/ctx_state/<root>.json) and the
 # cumulative ``fact_hashes`` list carried in chain head/manifest metadata.
 FACT_STATE_DIR = "ctx_state"
-FACT_LEDGER_MAX = 500          # keys per root (FIFO)
-FACT_HASHES_META_MAX = 200     # keys in chain metadata (newest kept)
+FACT_LEDGER_MAX = 500  # keys per root (FIFO)
+FACT_HASHES_META_MAX = 200  # keys in chain metadata (newest kept)
 
 # P5: session digests per segment. Plan thresholds: ≥ 4 exchanges since the last digest,
 # rolling digest after 40 exchanges or 6 h; idle digest after 6 h without a turn.
@@ -80,16 +81,16 @@ DEFAULT_STATE_RETENTION_DAYS = 30
 # ---------------------------------------------------------------------------
 
 
-def _default_config() -> Dict[str, Any]:
+def _default_config() -> dict[str, Any]:
     return {
         "ctx_base_url": "",
         "sensitivity_default": DEFAULT_SENSITIVITY,
         "prefetch_mode": "query",  # "query" | "search"
         "max_prefetch_results": DEFAULT_MAX_PREFETCH_RESULTS,
         "auto_recall": True,
-        "auto_capture": True,             # master switch for mirror + digest
-        "auto_memory_mirror": True,       # on_memory_write → CTX (needs auto_capture)
-        "auto_session_digest": True,      # on_session_end digest (needs auto_capture)
+        "auto_capture": True,  # master switch for mirror + digest
+        "auto_memory_mirror": True,  # on_memory_write → CTX (needs auto_capture)
+        "auto_session_digest": True,  # on_session_end digest (needs auto_capture)
         "auto_compress_extract": True,
         # P4: user turns are mostly tasks/questions/feedback, not facts. false = only
         # declarative turns (no request/question/feedback markers), "none" = never,
@@ -114,8 +115,8 @@ def _default_config() -> Dict[str, Any]:
         # Unit "exchanges" = user/assistant text messages (as the pre-P5 threshold).
         "digest_min_exchanges": DEFAULT_DIGEST_MIN_EXCHANGES,
         "digest_every_exchanges": DEFAULT_DIGEST_EVERY_EXCHANGES,  # 0 = off
-        "digest_every_hours": DEFAULT_DIGEST_EVERY_HOURS,          # 0 = off
-        "idle_digest_minutes": DEFAULT_IDLE_DIGEST_MINUTES,        # 0 = off
+        "digest_every_hours": DEFAULT_DIGEST_EVERY_HOURS,  # 0 = off
+        "idle_digest_minutes": DEFAULT_IDLE_DIGEST_MINUTES,  # 0 = off
         # P5: prune $HERMES_HOME/ctx_state files untouched for N days (0 = never)
         "state_retention_days": DEFAULT_STATE_RETENTION_DAYS,
     }
@@ -125,7 +126,7 @@ def ctx_config_path(hermes_home: str) -> Path:
     return Path(hermes_home) / "ctx.json"
 
 
-def load_ctx_config(hermes_home: str) -> Dict[str, Any]:
+def load_ctx_config(hermes_home: str) -> dict[str, Any]:
     """Load ctx.json merged over defaults. Never raises (corrupt file → defaults)."""
     config = _default_config()
     path = ctx_config_path(hermes_home)
@@ -144,7 +145,9 @@ def load_ctx_config(hermes_home: str) -> Dict[str, Any]:
     mode = str(config.get("prefetch_mode", "query")).strip().lower()
     config["prefetch_mode"] = mode if mode in ("query", "search") else "query"
     try:
-        config["max_prefetch_results"] = max(1, min(10, int(config.get("max_prefetch_results", DEFAULT_MAX_PREFETCH_RESULTS))))
+        config["max_prefetch_results"] = max(
+            1, min(10, int(config.get("max_prefetch_results", DEFAULT_MAX_PREFETCH_RESULTS)))
+        )
     except Exception:
         config["max_prefetch_results"] = DEFAULT_MAX_PREFETCH_RESULTS
     config["auto_recall"] = _as_bool(config.get("auto_recall"), True)
@@ -153,10 +156,12 @@ def load_ctx_config(hermes_home: str) -> Dict[str, Any]:
     config["auto_session_digest"] = _as_bool(config.get("auto_session_digest"), True)
     config["auto_compress_extract"] = _as_bool(config.get("auto_compress_extract"), True)
     ffu = config.get("facts_from_user")
-    config["facts_from_user"] = ("none" if ffu is None or str(ffu).strip().lower() in ("none", "never", "")
-                                 else _as_bool(ffu, False))
+    config["facts_from_user"] = (
+        "none" if ffu is None or str(ffu).strip().lower() in ("none", "never", "") else _as_bool(ffu, False)
+    )
     config["prefetch_types_exclude"] = _as_type_list(
-        config.get("prefetch_types_exclude"), list(DEFAULT_PREFETCH_TYPES_EXCLUDE))
+        config.get("prefetch_types_exclude"), list(DEFAULT_PREFETCH_TYPES_EXCLUDE)
+    )
     pu = str(config.get("prefetch_untrusted", DEFAULT_PREFETCH_UNTRUSTED)).strip().lower()
     config["prefetch_untrusted"] = pu if pu in PREFETCH_UNTRUSTED_MODES else DEFAULT_PREFETCH_UNTRUSTED
     try:
@@ -164,24 +169,32 @@ def load_ctx_config(hermes_home: str) -> Dict[str, Any]:
     except Exception:
         config["api_timeout"] = DEFAULT_API_TIMEOUT
     try:
-        config["synthesis_timeout"] = max(15.0, min(300.0, float(config.get("synthesis_timeout", DEFAULT_SYNTHESIS_TIMEOUT))))
+        config["synthesis_timeout"] = max(
+            15.0, min(300.0, float(config.get("synthesis_timeout", DEFAULT_SYNTHESIS_TIMEOUT)))
+        )
     except Exception:
         config["synthesis_timeout"] = DEFAULT_SYNTHESIS_TIMEOUT
     cp_mode = str(config.get("checkpoint_mode", DEFAULT_CHECKPOINT_MODE)).strip().lower().replace("-", "_")
     config["checkpoint_mode"] = cp_mode if cp_mode in CHECKPOINT_MODES else DEFAULT_CHECKPOINT_MODE
     try:
-        config["checkpoint_budget_s"] = max(5.0, min(60.0, float(config.get("checkpoint_budget_s", DEFAULT_CHECKPOINT_BUDGET_S))))
+        config["checkpoint_budget_s"] = max(
+            5.0, min(60.0, float(config.get("checkpoint_budget_s", DEFAULT_CHECKPOINT_BUDGET_S)))
+        )
     except Exception:
         config["checkpoint_budget_s"] = DEFAULT_CHECKPOINT_BUDGET_S
     config["checkpoint_chain"] = _as_bool(config.get("checkpoint_chain"), DEFAULT_CHECKPOINT_CHAIN)
     cps = str(config.get("checkpoint_sensitivity", DEFAULT_CHECKPOINT_SENSITIVITY)).strip().lower()
     config["checkpoint_sensitivity"] = cps if cps in VALID_SENSITIVITIES else DEFAULT_CHECKPOINT_SENSITIVITY
     try:
-        config["checkpoint_chunk_chars"] = max(1_000, min(40_000, int(config.get("checkpoint_chunk_chars", DEFAULT_CHECKPOINT_CHUNK_CHARS))))
+        config["checkpoint_chunk_chars"] = max(
+            1_000, min(40_000, int(config.get("checkpoint_chunk_chars", DEFAULT_CHECKPOINT_CHUNK_CHARS)))
+        )
     except Exception:
         config["checkpoint_chunk_chars"] = DEFAULT_CHECKPOINT_CHUNK_CHARS
     try:
-        config["checkpoint_max_parts"] = max(1, min(95, int(config.get("checkpoint_max_parts", DEFAULT_CHECKPOINT_MAX_PARTS))))
+        config["checkpoint_max_parts"] = max(
+            1, min(95, int(config.get("checkpoint_max_parts", DEFAULT_CHECKPOINT_MAX_PARTS)))
+        )
     except Exception:
         config["checkpoint_max_parts"] = DEFAULT_CHECKPOINT_MAX_PARTS
     for key, default, lo, hi, cast in (
@@ -198,9 +211,9 @@ def load_ctx_config(hermes_home: str) -> Dict[str, Any]:
     return config
 
 
-def save_ctx_config(values: Dict[str, Any], hermes_home: str) -> None:
+def save_ctx_config(values: dict[str, Any], hermes_home: str) -> None:
     """Merge non-secret values into ctx.json atomically (mode 0600)."""
-    existing: Dict[str, Any] = {}
+    existing: dict[str, Any] = {}
     path = ctx_config_path(hermes_home)
     if path.exists():
         try:
@@ -229,13 +242,13 @@ def resolve_base_url(config_value: str = "") -> str:
     return raw.rstrip("/")
 
 
-def _as_type_list(value: Any, default: List[str]) -> List[str]:
+def _as_type_list(value: Any, default: list[str]) -> list[str]:
     """Block-type name list: list or comma string; ``[]`` is valid (= exclude nothing)."""
     if isinstance(value, str):
         value = value.split(",")
     if not isinstance(value, (list, tuple)):
         return list(default)
-    out: List[str] = []
+    out: list[str] = []
     for item in value:
         if isinstance(item, str):
             name = item.strip().lower()
@@ -272,7 +285,7 @@ _MAX_TAG_LEN = 64
 _MAX_AGENT_TAGS = 16
 
 
-def derive_profile_name(hermes_home: Optional[str]) -> str:
+def derive_profile_name(hermes_home: str | None) -> str:
     """``…/profiles/<name>`` → ``<name>``; anything else (base ~/.hermes) → ``default``."""
     raw = str(hermes_home or "").strip()
     if not raw:
@@ -283,13 +296,13 @@ def derive_profile_name(hermes_home: Optional[str]) -> str:
     return "default"
 
 
-def origin_tags(profile: str, hook: str) -> List[str]:
+def origin_tags(profile: str, hook: str) -> list[str]:
     return [f"source:{ORIGIN_SOURCE}", f"profile:{profile or 'default'}", f"hook:{hook}"]
 
 
-def merge_tags(agent_tags: Any, profile: str, hook: str) -> List[str]:
+def merge_tags(agent_tags: Any, profile: str, hook: str) -> list[str]:
     """Agent tags (order kept, deduped, reserved prefixes dropped) + origin tags."""
-    merged: List[str] = []
+    merged: list[str] = []
     if isinstance(agent_tags, str):
         agent_tags = [t for t in agent_tags.split(",")]
     for tag in agent_tags or []:
@@ -402,7 +415,8 @@ _SELF_TALK_START = re.compile(
     # P4.2: more leaked-reasoning openers seen in replay ("The user wants
     # me to …", "The user sent a message about …", "The user's request was …").
     r"(?:okay|ok|alright|so)?,?\s*the user(?:'s)?(?:\s*\([^)\n]{0,60}\))?\s+(?:wants|asked|asks|needs|sent|"
-    r"has (?:sent|asked|requested|confirmed|provided|given)|is (?:asking|confirming|continuing|requesting|saying|telling|pointing|challenging|"
+    r"has (?:sent|asked|requested|confirmed|provided|given)|"
+    r"is (?:asking|confirming|continuing|requesting|saying|telling|pointing|challenging|"
     r"reporting|referring|complaining|expecting|trying|clarifying|correcting|questioning)|"
     r"response|request|task|message|question|criteria|just|seems|confirmed|picked)\b|"
     r"(?:okay|ok|alright),? (?:so |now )?(?:i|let me|let's)\b"
@@ -602,7 +616,7 @@ def fact_noise_reason(text: str) -> str:
     return ""
 
 
-def _message_text(message: Dict[str, Any]) -> Optional[str]:
+def _message_text(message: dict[str, Any]) -> str | None:
     content = message.get("content")
     if isinstance(content, list):
         parts = []
@@ -615,7 +629,7 @@ def _message_text(message: Dict[str, Any]) -> Optional[str]:
     return content.strip()
 
 
-def fact_keys(text: str) -> List[str]:
+def fact_keys(text: str) -> list[str]:
     """Dedupe keys of a fact: SHA-256 (16 hex) of the normalized text and of its block
     title. The title key matters because CTX upserts by (category, title): two facts
     with the same first 60 chars would overwrite each other."""
@@ -628,12 +642,12 @@ def fact_keys(text: str) -> List[str]:
 
 
 def extract_salient_facts(
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
     max_facts: int = SALIENT_MAX_FACTS,
     facts_from_user: Any = "none",
-    skip_keys: Optional[Iterable[str]] = None,
-) -> List[str]:
+    skip_keys: Iterable[str] | None = None,
+) -> list[str]:
     """Heuristic saliency extraction for on_pre_compress (no LLM call).
 
     P4: candidates are scanned from the END of the batch (closing answers carry the
@@ -648,7 +662,7 @@ def extract_salient_facts(
     """
     msgs = [m for m in (messages or []) if isinstance(m, dict)]
     skip = set(skip_keys or ())
-    picked: List[str] = []
+    picked: list[str] = []
     for idx in range(len(msgs) - 1, -1, -1):
         message = msgs[idx]
         role = message.get("role")
@@ -668,7 +682,7 @@ def extract_salient_facts(
             elif is_user_request(text):
                 reason = "user-request"
         if not reason and role == "assistant" and len(text) <= _SELF_TALK_ANY_MAX_LEN:
-            nxt = next((m.get("role") for m in msgs[idx + 1:] if m.get("role") in ("user", "assistant")), None)
+            nxt = next((m.get("role") for m in msgs[idx + 1 :] if m.get("role") in ("user", "assistant")), None)
             if nxt == "assistant":
                 reason = "mid-turn"
         if reason:
@@ -708,7 +722,7 @@ class FactLedger:
         self.path = Path(hermes_home) / FACT_STATE_DIR / f"{_safe_root(self.root)}.json"
         self.max_keys = max_keys
         self._lock = threading.Lock()
-        self._keys: List[str] = []
+        self._keys: list[str] = []
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and isinstance(raw.get("keys"), list):
@@ -718,7 +732,7 @@ class FactLedger:
         except Exception:
             logger.debug("CTX fact ledger unreadable: %s", self.path, exc_info=True)
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         with self._lock:
             return list(self._keys)
 
@@ -729,7 +743,7 @@ class FactLedger:
                 if isinstance(k, str) and k and k not in known:
                     self._keys.append(k)
                     known.add(k)
-            self._keys = self._keys[-self.max_keys:]
+            self._keys = self._keys[-self.max_keys :]
             self._save()
 
     def discard(self, keys: Iterable[str]) -> None:
