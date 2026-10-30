@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClient, join_writes
 
 import ctx_plugin.provider as provider_mod
@@ -30,16 +29,27 @@ def _turns(n: int, tag: str = "a"):
     return out
 
 
-CARRIER = {"role": "user", "content": "[CONTEXT COMPACTION] Zusammenfassung frueherer Turns ...",
-           "_compressed_summary": True}
+CARRIER = {
+    "role": "user",
+    "content": "[CONTEXT COMPACTION] Zusammenfassung frueherer Turns ...",
+    "_compressed_summary": True,
+}
 
 
 def _digests(client):
     return [c for c in client.calls if str(c["title"]).startswith("Session digest")]
 
 
-def _provider(tmp_path, monkeypatch, *, session_id="20261020_100000_abc123", profile="default",
-              config=None, agent_context="primary", home=None):
+def _provider(
+    tmp_path,
+    monkeypatch,
+    *,
+    session_id="20261020_100000_abc123",
+    profile="default",
+    config=None,
+    agent_context="primary",
+    home=None,
+):
     monkeypatch.setenv("CTX_KEY", "test-key-not-real")
     monkeypatch.setenv("CTX_BASE_URL", "http://ctx.invalid")
     monkeypatch.setattr(provider_mod, "CtxClient", FakeClient)
@@ -64,11 +74,25 @@ def _reset_prune_registry():
 
 def test_config_defaults_and_coercion(tmp_path):
     cfg = load_ctx_config(str(tmp_path))
-    assert (cfg["digest_min_exchanges"], cfg["digest_every_exchanges"], cfg["digest_every_hours"],
-            cfg["idle_digest_minutes"], cfg["state_retention_days"]) == (4, 40, 6.0, 360.0, 30)
-    (tmp_path / "ctx.json").write_text(json.dumps({
-        "digest_every_exchanges": "0", "digest_every_hours": -3, "idle_digest_minutes": "x",
-        "state_retention_days": 99999, "digest_min_exchanges": 0}), encoding="utf-8")
+    assert (
+        cfg["digest_min_exchanges"],
+        cfg["digest_every_exchanges"],
+        cfg["digest_every_hours"],
+        cfg["idle_digest_minutes"],
+        cfg["state_retention_days"],
+    ) == (4, 40, 6.0, 360.0, 30)
+    (tmp_path / "ctx.json").write_text(
+        json.dumps(
+            {
+                "digest_every_exchanges": "0",
+                "digest_every_hours": -3,
+                "idle_digest_minutes": "x",
+                "state_retention_days": 99999,
+                "digest_min_exchanges": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     cfg = load_ctx_config(str(tmp_path))
     assert cfg["digest_every_exchanges"] == 0
     assert cfg["digest_every_hours"] == 0.0
@@ -89,7 +113,7 @@ def test_compaction_and_end_give_two_distinct_digests(tmp_path, monkeypatch):
     p.on_session_end(seg1)
     join_writes(p)
     # conversation continues on the compacted transcript: head + carrier + tail + new turns
-    seg2_msgs = seg1[:2] + [CARRIER] + seg1[-2:] + _turns(3, "b")
+    seg2_msgs = [*seg1[:2], CARRIER, *seg1[-2:], *_turns(3, "b")]
     p.on_session_end(seg2_msgs)
     join_writes(p)
     d = _digests(c)
@@ -154,8 +178,9 @@ def test_failed_store_releases_exchanges(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("ctx", ["cron", "subagent", "flush"])
 def test_no_digest_in_cron_subagent_flush(tmp_path, monkeypatch, ctx):
-    p, c, _ = _provider(tmp_path, monkeypatch, agent_context=ctx,
-                        config={"digest_every_exchanges": 2, "idle_digest_minutes": 0.001})
+    p, c, _ = _provider(
+        tmp_path, monkeypatch, agent_context=ctx, config={"digest_every_exchanges": 2, "idle_digest_minutes": 0.001}
+    )
     msgs = _turns(4)
     p.on_pre_compress(msgs)
     p.sync_turn("u", "a", messages=msgs)
@@ -168,8 +193,9 @@ def test_no_digest_in_cron_subagent_flush(tmp_path, monkeypatch, ctx):
 
 @pytest.mark.parametrize("cfg", [{"auto_session_digest": False}, {"auto_capture": False}])
 def test_switches_block_all_digest_paths(tmp_path, monkeypatch, cfg):
-    p, c, _ = _provider(tmp_path, monkeypatch,
-                        config={**cfg, "digest_every_exchanges": 2, "idle_digest_minutes": 0.001})
+    p, c, _ = _provider(
+        tmp_path, monkeypatch, config={**cfg, "digest_every_exchanges": 2, "idle_digest_minutes": 0.001}
+    )
     msgs = _turns(4)
     p.sync_turn("u", "a", messages=msgs)
     p.on_session_end(msgs)
@@ -177,7 +203,8 @@ def test_switches_block_all_digest_paths(tmp_path, monkeypatch, cfg):
     join_writes(p)
     assert _digests(c) == []
     assert not (Path(p._hermes_home) / "ctx_state").exists() or not list(
-        (Path(p._hermes_home) / "ctx_state").glob("*.digest.json"))
+        (Path(p._hermes_home) / "ctx_state").glob("*.digest.json")
+    )
 
 
 # -- Rolling + idle ---------------------------------------------------------------------------
@@ -202,8 +229,9 @@ def test_rolling_digest_by_exchanges_fires_once_per_threshold(tmp_path, monkeypa
 
 
 def test_rolling_digest_by_hours(tmp_path, monkeypatch):
-    p, c, _ = _provider(tmp_path, monkeypatch,
-                        config={"digest_every_exchanges": 0, "digest_every_hours": 6, "idle_digest_minutes": 0})
+    p, c, _ = _provider(
+        tmp_path, monkeypatch, config={"digest_every_exchanges": 0, "digest_every_hours": 6, "idle_digest_minutes": 0}
+    )
     msgs = _turns(2)
     p.sync_turn("u", "a", messages=msgs)
     join_writes(p)
@@ -215,8 +243,11 @@ def test_rolling_digest_by_hours(tmp_path, monkeypatch):
 
 
 def test_idle_trigger_fires_exactly_once(tmp_path, monkeypatch):
-    p, c, _ = _provider(tmp_path, monkeypatch, config={"idle_digest_minutes": 0.002, "digest_every_exchanges": 0,
-                                                       "digest_every_hours": 0})
+    p, c, _ = _provider(
+        tmp_path,
+        monkeypatch,
+        config={"idle_digest_minutes": 0.002, "digest_every_exchanges": 0, "digest_every_hours": 0},
+    )
     msgs = _turns(3)
     p.sync_turn("u", "a", messages=msgs)
     assert p._idle_timer is not None
@@ -238,11 +269,11 @@ def test_idle_trigger_fires_exactly_once(tmp_path, monkeypatch):
 
 
 def test_new_turn_rearms_idle_timer_and_end_cancels(tmp_path, monkeypatch):
-    p, c, _ = _provider(tmp_path, monkeypatch, config={"idle_digest_minutes": 10})
+    p, _c, _ = _provider(tmp_path, monkeypatch, config={"idle_digest_minutes": 10})
     p.sync_turn("u", "a", messages=_turns(2))
     first = p._idle_timer
     p.sync_turn("u", "a", messages=_turns(3))
-    assert p._idle_timer is not first and not first.is_alive() or first.finished.is_set()
+    assert p._idle_timer is not first and first.finished.is_set(), "re-arm must cancel the old timer"
     p.on_session_end(_turns(3))
     join_writes(p)
     assert p._idle_timer is None
@@ -261,8 +292,7 @@ def _make_state_db(home: Path):
     db.create_session("C-child", "desktop", parent_session_id="R-root")
     db.end_session("C-child", "compression")
     db.create_session("G-grandchild", "desktop", parent_session_id="C-child")
-    db.create_session("B-branch", "desktop", parent_session_id="C-child",
-                      model_config={"_branched_from": "C-child"})
+    db.create_session("B-branch", "desktop", parent_session_id="C-child", model_config={"_branched_from": "C-child"})
     db.create_session("N-new", "desktop")
     return db
 
@@ -288,9 +318,13 @@ def test_root_stable_after_restart_chain_dedupe_and_segments(tmp_path, monkeypat
     _make_state_db(home).close()
     evidence = [
         {"role": "user", "content": "Wie ist der Stand beim Backup?"},
-        {"role": "assistant", "content": "Das Backup-Ziel ist jetzt das NAS unter 10.0.0.20, Aufbewahrung 30 Tage, "
-                                         "taeglicher Lauf um 02:00 mit Verifikation per Restore-Test."},
-    ] + _turns(2)
+        {
+            "role": "assistant",
+            "content": "Das Backup-Ziel ist jetzt das NAS unter 10.0.0.20, Aufbewahrung 30 Tage, "
+            "taeglicher Lauf um 02:00 mit Verifikation per Restore-Test.",
+        },
+        *_turns(2),
+    ]
     # process 1: original root session
     p1, c1, _ = _provider(tmp_path, monkeypatch, session_id="R-root", home=home)
     assert p1._root_session_id == "R-root"
@@ -396,8 +430,9 @@ def test_real_memory_manager_sync_all_reaches_rolling_digest(tmp_path, monkeypat
     mm = MemoryManager()
     mm.add_provider(p)
     msgs = _turns(2)
-    mm.sync_all("Frage a1: wie ist der Stand von Dienst a1?", "Dienst a1 laeuft.", session_id=p._session_id,
-                messages=msgs)
+    mm.sync_all(
+        "Frage a1: wie ist der Stand von Dienst a1?", "Dienst a1 laeuft.", session_id=p._session_id, messages=msgs
+    )
     assert mm.flush_pending(timeout=5.0)
     join_writes(p)
     d = _digests(c)

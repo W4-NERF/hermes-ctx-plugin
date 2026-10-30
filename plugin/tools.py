@@ -9,11 +9,18 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from tools.registry import tool_error
 
-from .client import RESERVED_METADATA_KEYS, CtxApiError, response_code, store_action, store_block_id
+from .client import (
+    RESERVED_METADATA_KEYS,
+    RETRYABLE_CODES,
+    CtxApiError,
+    response_code,
+    store_action,
+    store_block_id,
+)
 from .config import DEFAULT_SENSITIVITY, UNTRUSTED_LABEL, VALID_SENSITIVITIES, merge_tags, shorten
 
 logger = logging.getLogger(__name__)
@@ -61,7 +68,10 @@ STORE_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "category": {"type": "string", "description": "Block category (e.g. 'infrastructure', 'reference', 'decisions')."},
+            "category": {
+                "type": "string",
+                "description": "Block category (e.g. 'infrastructure', 'reference', 'decisions').",
+            },
             "title": {"type": "string", "description": "Short descriptive title."},
             "content": {"type": "string", "description": "The fact or knowledge content."},
             "sensitivity": {
@@ -82,9 +92,15 @@ STORE_SCHEMA = {
             },
             "type": {
                 "type": "string",
-                "description": "Optional explicit block type (registry name). Unknown → unknown_type; derived types → reserved_type.",
+                "description": (
+                    "Optional explicit block type (registry name). Unknown → unknown_type; "
+                    "derived types → reserved_type."
+                ),
             },
-            "parent_id": {"type": "string", "description": "Optional parent block id (UUID) for types that require a parent."},
+            "parent_id": {
+                "type": "string",
+                "description": "Optional parent block id (UUID) for types that require a parent.",
+            },
             "metadata": {
                 "type": "object",
                 "description": "Optional JSON metadata. The key 'provenance' is server-owned and rejected.",
@@ -126,13 +142,13 @@ GET_SCHEMA = {
 }
 
 
-def get_tool_schemas() -> List[Dict[str, Any]]:
+def get_tool_schemas() -> list[dict[str, Any]]:
     return [QUERY_SCHEMA, STORE_SCHEMA, SEARCH_SCHEMA, GET_SCHEMA]
 
 
-def handle_tool_call(provider, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+def handle_tool_call(provider, tool_name: str, args: dict[str, Any], **kwargs) -> str:
     """Dispatch a tool call on behalf of the provider instance."""
-    if not provider._active or not provider._client:  # noqa: SLF001
+    if not provider._active or not provider._client:
         return tool_error("CTX provider is not active (check CTX_BASE_URL/CTX_KEY and server reachability)")
     try:
         if tool_name == "ctx_query":
@@ -145,8 +161,14 @@ def handle_tool_call(provider, tool_name: str, args: Dict[str, Any], **kwargs) -
             return _tool_get(provider, args)
     except CtxApiError as exc:
         if exc.code:
-            logger.warning("CTX tool %s rejected (profile=%s): code=%s status=%s: %s", tool_name,
-                           getattr(provider, "_profile", "default"), exc.code, exc.status, shorten(str(exc), 200))
+            logger.warning(
+                "CTX tool %s rejected (profile=%s): code=%s status=%s: %s",
+                tool_name,
+                getattr(provider, "_profile", "default"),
+                exc.code,
+                exc.status,
+                shorten(str(exc), 200),
+            )
             return tool_error(f"CTX tool {tool_name} rejected: {exc}", code=exc.code, retryable=not exc.permanent)
         logger.debug("CTX tool %s failed: %s", tool_name, exc, exc_info=True)
         return tool_error(f"CTX tool {tool_name} failed: {exc}")
@@ -156,7 +178,7 @@ def handle_tool_call(provider, tool_name: str, args: Dict[str, Any], **kwargs) -
     return tool_error(f"Unknown CTX tool: {tool_name}")
 
 
-def _types_exclude_arg(provider, args: Dict[str, Any]) -> List[str]:
+def _types_exclude_arg(provider, args: dict[str, Any]) -> list[str]:
     """Explicit ``types_exclude`` (list, ``[]`` allowed) or the configured prefetch default."""
     raw = args.get("types_exclude")
     if raw is None:
@@ -168,7 +190,7 @@ def _types_exclude_arg(provider, args: Dict[str, Any]) -> List[str]:
     return [str(t).strip().lower() for t in raw if isinstance(t, str) and t.strip()]
 
 
-def _str_list(raw: Any) -> List[str]:
+def _str_list(raw: Any) -> list[str]:
     if isinstance(raw, str):
         raw = raw.split(",")
     if not isinstance(raw, (list, tuple)):
@@ -176,7 +198,7 @@ def _str_list(raw: Any) -> List[str]:
     return [str(t).strip() for t in raw if isinstance(t, (str, int, float)) and str(t).strip()]
 
 
-def _trust_fields(entry: Dict[str, Any], item: Dict[str, Any]) -> bool:
+def _trust_fields(entry: dict[str, Any], item: dict[str, Any]) -> bool:
     """Copy ``type``/``untrusted`` into a result row; returns True when untrusted."""
     if item.get("type"):
         entry["type"] = item["type"]
@@ -186,16 +208,17 @@ def _trust_fields(entry: Dict[str, Any], item: Dict[str, Any]) -> bool:
     return False
 
 
-def _tool_query(provider, args: Dict[str, Any]) -> str:
+def _tool_query(provider, args: dict[str, Any]) -> str:
     text = str(args.get("text") or "").strip()
     if not text:
         return tool_error("text is required")
     synthesize = bool(args.get("synthesize"))
-    data = provider._client.query(  # noqa: SLF001
-        text, synthesize=synthesize, include_content=True, types_exclude=_types_exclude_arg(provider, args))
+    data = provider._client.query(
+        text, synthesize=synthesize, include_content=True, types_exclude=_types_exclude_arg(provider, args)
+    )
     if not data.get("success"):
         return tool_error(f"CTX query failed: {data.get('error') or 'unknown error'}")
-    result: Dict[str, Any] = {"synthesize": synthesize}
+    result: dict[str, Any] = {"synthesize": synthesize}
     if synthesize:
         result["answer"] = data.get("answer") or ""
     sources = []
@@ -216,7 +239,7 @@ def _tool_query(provider, args: Dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def _tool_store(provider, args: Dict[str, Any]) -> str:
+def _tool_store(provider, args: dict[str, Any]) -> str:
     category = str(args.get("category") or "").strip()
     title = str(args.get("title") or "").strip()
     content = str(args.get("content") or "").strip()
@@ -225,7 +248,7 @@ def _tool_store(provider, args: Dict[str, Any]) -> str:
     sensitivity = str(args.get("sensitivity") or "").strip().lower() or None
     if sensitivity and sensitivity not in VALID_SENSITIVITIES:
         return tool_error(f"sensitivity must be one of: {', '.join(VALID_SENSITIVITIES)}")
-    extra: Dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     btype = str(args.get("type") or "").strip()
     if btype:
         extra["type"] = btype
@@ -238,49 +261,66 @@ def _tool_store(provider, args: Dict[str, Any]) -> str:
             return tool_error("metadata must be a JSON object")
         reserved = [k for k in RESERVED_METADATA_KEYS if k in metadata]
         if reserved:
-            return tool_error(f"metadata key '{reserved[0]}' is server-owned and cannot be written",
-                              code="reserved_metadata", retryable=False)
+            return tool_error(
+                f"metadata key '{reserved[0]}' is server-owned and cannot be written",
+                code="reserved_metadata",
+                retryable=False,
+            )
         if metadata:
             extra["metadata"] = metadata
     profile = getattr(provider, "_profile", "default")
-    data = provider._client.store(  # noqa: SLF001
+    data = provider._client.store(
         category,
         title,
         content,
-        sensitivity=sensitivity or provider._config.get("sensitivity_default"),  # noqa: SLF001
+        sensitivity=sensitivity or provider._config.get("sensitivity_default"),
         tags=merge_tags(args.get("tags"), profile, "tool"),
         **extra,
     )
     if not data.get("success"):
         code = response_code(data)
-        logger.warning("CTX tool store rejected (profile=%s, %s/%s): code=%s: %s", profile,
-                       category, shorten(title, 80), code or "-", shorten(str(data.get("error") or "unknown error"), 200))
+        logger.warning(
+            "CTX tool store rejected (profile=%s, %s/%s): code=%s: %s",
+            profile,
+            category,
+            shorten(title, 80),
+            code or "-",
+            shorten(str(data.get("error") or "unknown error"), 200),
+        )
+        message = f"CTX store failed: {data.get('error') or 'unknown error'}"
         if code:
-            return tool_error(f"CTX store failed: {data.get('error') or 'unknown error'}", code=code)
-        return tool_error(f"CTX store failed: {data.get('error') or 'unknown error'}")
-    logger.info("CTX tool store %s (profile=%s, %s/%s, id=%s)", store_action(data), getattr(provider, "_profile", "default"),
-                category, shorten(title, 80), store_block_id(data) or "?")
-    result: Dict[str, Any] = {"saved": True, "category": category, "title": title}
+            return tool_error(message, code=code, retryable=code in RETRYABLE_CODES)
+        return tool_error(message)
     block_id = store_block_id(data)
+    logger.info(
+        "CTX tool store %s (profile=%s, %s/%s, id=%s)",
+        store_action(data),
+        profile,
+        category,
+        shorten(title, 80),
+        block_id or "?",
+    )
+    result: dict[str, Any] = {"saved": True, "category": category, "title": title}
     if block_id:
         result["id"] = block_id
     return json.dumps(result, ensure_ascii=False)
 
 
-def _tool_search(provider, args: Dict[str, Any]) -> str:
+def _tool_search(provider, args: dict[str, Any]) -> str:
     query = str(args.get("query") or "").strip()
     if not query:
         return tool_error("query is required")
     category = str(args.get("category") or "").strip() or None
     tags = _str_list(args.get("tags"))
-    data = provider._client.search(  # noqa: SLF001
-        query, category=category, tags=tags or None, types_exclude=_types_exclude_arg(provider, args))
+    data = provider._client.search(
+        query, category=category, tags=tags or None, types_exclude=_types_exclude_arg(provider, args)
+    )
     if not data.get("success"):
         return tool_error(f"CTX search failed: {data.get('error') or 'unknown error'}")
     results = []
     any_untrusted = False
     for item in data.get("results") or []:
-        entry: Dict[str, Any] = {}
+        entry: dict[str, Any] = {}
         for key in ("id", "title", "category", "score", "age_days"):
             if item.get(key) is not None:
                 entry[key] = item[key]
@@ -289,17 +329,17 @@ def _tool_search(provider, args: Dict[str, Any]) -> str:
         if item.get("content"):
             entry["content"] = f"{UNTRUSTED_LABEL} {item['content']}" if untrusted else item["content"]
         results.append(entry)
-    out: Dict[str, Any] = {"count": data.get("count") or len(results), "results": results}
+    out: dict[str, Any] = {"count": data.get("count") or len(results), "results": results}
     if any_untrusted:
         out["untrusted_note"] = UNTRUSTED_NOTE
     return json.dumps(out, ensure_ascii=False)
 
 
-def _tool_get(provider, args: Dict[str, Any]) -> str:
+def _tool_get(provider, args: dict[str, Any]) -> str:
     block_id = str(args.get("block_id") or "").strip()
     if not block_id:
         return tool_error("block_id is required")
-    data = provider._client.get_block(block_id)  # noqa: SLF001
+    data = provider._client.get_block(block_id)
     if not data.get("success"):
         return tool_error(f"CTX get failed: {data.get('error') or 'unknown error'}")
     block = data.get("block") if isinstance(data.get("block"), dict) else data

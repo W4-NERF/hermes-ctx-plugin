@@ -27,10 +27,9 @@ import re
 import sys
 import time
 
-import pytest
-
 import agent.conversation_compression as host_compression
 import agent.memory_provider as host_contract
+import pytest
 from agent.memory_manager import MemoryManager
 
 import ctx_plugin.checkpoint as _MODULE
@@ -46,13 +45,13 @@ class ChainFake:
 
     def __init__(self, base_url="", api_key="", timeout=10.0, synthesis_timeout=90.0, **_kw):
         self.calls: list = []
-        self.ids = None            # iterator of ids for store; else counter
+        self.ids = None  # iterator of ids for store; else counter
         self.counter = 50
         self.search_payload = {"success": True, "results": []}
         self.get_payload = None
-        self.store_hook = None     # callable(args) -> None | raise
-        self.stateful = False      # upsert by (category,title) + search/get over own blocks
-        self.blocks: dict = {}     # title -> {"id", "metadata", ...}
+        self.store_hook = None  # callable(args) -> None | raise
+        self.stateful = False  # upsert by (category,title) + search/get over own blocks
+        self.blocks: dict = {}  # title -> {"id", "metadata", ...}
 
     def whoami(self):
         return {"success": True, "home_scope": "shared", "label": "test-key"}
@@ -67,8 +66,11 @@ class ChainFake:
     def search(self, text, **k):
         self.calls.append(("search", {"query": text, **k}))
         if self.stateful:
-            rows = [{"id": b["id"], "title": t, "type": "checkpoint", "untrusted": True}
-                    for t, b in self.blocks.items() if text in t]
+            rows = [
+                {"id": b["id"], "title": t, "type": "checkpoint", "untrusted": True}
+                for t, b in self.blocks.items()
+                if text in t
+            ]
             return {"success": True, "results": rows}
         return self.search_payload
 
@@ -82,15 +84,11 @@ class ChainFake:
         return self.get_payload
 
     def store(self, category, title, content, sensitivity=None, tags=None, **k):
-        args = {"category": category, "title": title, "content": content, "sensitivity": sensitivity,
-                "tags": tags, **k}
+        args = {"category": category, "title": title, "content": content, "sensitivity": sensitivity, "tags": tags, **k}
         self.calls.append(("store", args))
         if self.store_hook is not None:
             self.store_hook(args)
-        if self.stateful and title in self.blocks:
-            bid = self.blocks[title]["id"]
-        else:
-            bid = self._next_id()
+        bid = self.blocks[title]["id"] if self.stateful and title in self.blocks else self._next_id()
         if self.stateful:
             self.blocks[title] = {"id": bid, "metadata": k.get("metadata") or {}}
         return {"success": True, "block": {"id": bid, "created_at": "t", "updated_at": "t"}}
@@ -139,6 +137,7 @@ def _stores(calls):
 # Part A — port of upstream test_provider_contract.py (9)
 # =============================================================================
 
+
 def test_provider_publishes_versioned_stable_head_with_bounded_frame(factory):
     source_id = "019f6000-0000-7000-8000-000000000041"
     manifest_id = "019f6000-0000-7000-8000-000000000042"
@@ -172,11 +171,16 @@ def test_provider_frame_stays_bounded_when_transcript_spans_many_source_blocks(f
 
 def test_provider_upserts_same_head_title_for_new_transcript_digest(factory):
     provider, c = factory("session-a", platform="cli")
-    c.ids = iter([
-        "019f6000-0000-7000-8000-000000000061", "019f6000-0000-7000-8000-000000000062",
-        "019f6000-0000-7000-8000-000000000063", "019f6000-0000-7000-8000-000000000064",
-        "019f6000-0000-7000-8000-000000000065", "019f6000-0000-7000-8000-000000000063",
-    ])
+    c.ids = iter(
+        [
+            "019f6000-0000-7000-8000-000000000061",
+            "019f6000-0000-7000-8000-000000000062",
+            "019f6000-0000-7000-8000-000000000063",
+            "019f6000-0000-7000-8000-000000000064",
+            "019f6000-0000-7000-8000-000000000065",
+            "019f6000-0000-7000-8000-000000000063",
+        ]
+    )
 
     first = provider.on_pre_compress([{"role": "user", "content": "first durable decision"}])
     second = provider.on_pre_compress([{"role": "user", "content": "second corrected decision"}])
@@ -190,25 +194,37 @@ def test_provider_upserts_same_head_title_for_new_transcript_digest(factory):
 
 def test_memory_manager_accepts_provider_as_required_checkpoint_api_v2(factory):
     provider, c = factory("session-a", platform="cli")
-    c.ids = iter(["019f6000-0000-7000-8000-000000000071", "019f6000-0000-7000-8000-000000000072",
-                  "019f6000-0000-7000-8000-000000000073"])
+    c.ids = iter(
+        [
+            "019f6000-0000-7000-8000-000000000071",
+            "019f6000-0000-7000-8000-000000000072",
+            "019f6000-0000-7000-8000-000000000073",
+        ]
+    )
     manager = MemoryManager()
     manager.add_provider(provider)
 
     assert manager.supports_pre_compress_checkpoint(1) is True
-    frame = manager.on_pre_compress([{"role": "user", "content": "manager integration evidence"}],
-                                    require_checkpoint=True, checkpoint_api_version=2)
+    frame = manager.on_pre_compress(
+        [{"role": "user", "content": "manager integration evidence"}], require_checkpoint=True, checkpoint_api_version=2
+    )
 
     assert "019f6000-0000-7000-8000-000000000073" in frame
 
 
 def test_literal_prior_context_user_quote_is_preserved_as_source_evidence(factory):
     provider, c = factory("session-a", platform="cli")
-    provider.on_pre_compress([{
-        "role": "user",
-        "content": ("[PRIOR CONTEXT — for reference only; not a new message] "
-                    "is a literal marker I want to discuss, not a Hermes envelope"),
-    }])
+    provider.on_pre_compress(
+        [
+            {
+                "role": "user",
+                "content": (
+                    "[PRIOR CONTEXT — for reference only; not a new message] "
+                    "is a literal marker I want to discuss, not a Hermes envelope"
+                ),
+            }
+        ]
+    )
     assert "literal marker I want to discuss" in c.calls[1][1]["content"]
 
 
@@ -217,10 +233,14 @@ def test_provider_links_new_manifest_to_previous_head_manifest_before_head_updat
     previous_manifest_id = "019f6000-0000-7000-8000-000000000092"
     provider, c = factory("session-a", platform="cli")
     c.ids = iter(["019f6000-0000-7000-8000-000000000093", "019f6000-0000-7000-8000-000000000094", previous_head_id])
-    c.search_payload = {"success": True, "results": [
-        {"id": previous_head_id, "title": "Compaction checkpoint head session-a", "type": "checkpoint"}]}
-    c.get_payload = {"success": True, "block": {"id": previous_head_id,
-                                                "metadata": {"latest_manifest_id": previous_manifest_id}}}
+    c.search_payload = {
+        "success": True,
+        "results": [{"id": previous_head_id, "title": "Compaction checkpoint head session-a", "type": "checkpoint"}],
+    }
+    c.get_payload = {
+        "success": True,
+        "block": {"id": previous_head_id, "metadata": {"latest_manifest_id": previous_manifest_id}},
+    }
 
     provider.on_pre_compress([{"role": "user", "content": "new durable child checkpoint"}])
 
@@ -261,6 +281,7 @@ def test_agent_context_and_platform_are_independent_metadata_keys(factory):
 # =============================================================================
 # Part A — port of upstream test_contract_negotiation.py (23)
 # =============================================================================
+
 
 def _provider(factory):
     p, c = factory("session-negotiation", platform="cli")
@@ -377,7 +398,7 @@ def test_probe_swallows_exception_raised_during_import(factory, monkeypatch):
             return None
 
     monkeypatch.delitem(sys.modules, "agent.memory_provider")
-    monkeypatch.setattr(sys, "meta_path", [_Exploding()] + sys.meta_path)
+    monkeypatch.setattr(sys, "meta_path", [_Exploding(), *sys.meta_path])
     with pytest.raises(RuntimeError):
         importlib.import_module("agent.memory_provider")
     assert _MODULE._probe_host_checkpoint_api() == 2
@@ -388,8 +409,11 @@ def test_tool_evidence_kwarg_is_accepted_and_labelled_received_unrendered(factor
     provider, c = _provider(factory)
     evidence = [{"ordinal": 3, "tool": "read_file", "summary": "read README.md"}]
     with caplog.at_level(logging.WARNING):
-        frame = provider.on_pre_compress([{"role": "user", "content": "evidence with a tool index"}],
-                                         tool_evidence=evidence, future_keyword="ignored")
+        frame = provider.on_pre_compress(
+            [{"role": "user", "content": "evidence with a tool index"}],
+            tool_evidence=evidence,
+            future_keyword="ignored",
+        )
     stores = _stores(c.calls)
     assert len(stores) == 3
     assert all(a["metadata"]["tool_index_status"] == "received-unrendered" for a in stores)
@@ -508,8 +532,9 @@ def test_session_switch_keeps_root_unless_reset(factory):
 
 def test_part_splitting_at_message_boundaries_and_40k_cap(factory):
     p, c = factory("sess-split", config={"checkpoint_chunk_chars": 99_999}, agent_context="primary")
-    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"Nachricht {i}: " + "w" * 9_000}
-            for i in range(12)]
+    msgs = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"Nachricht {i}: " + "w" * 9_000} for i in range(12)
+    ]
     p.on_pre_compress(msgs)
     parts = [a for a in _stores(c.calls) if " part " in a["title"]]
     assert len(parts) >= 3
@@ -526,8 +551,7 @@ def test_part_splitting_at_message_boundaries_and_40k_cap(factory):
     # lossless: concatenated parts == rendered transcript (modulo the boundary whitespace)
     assert re.sub(r"\s+", "", "".join(bodies)) == re.sub(r"\s+", "", rendered)
     manifest = _stores(c.calls)[-2]
-    assert manifest["metadata"]["source_block_ids"] == [
-        "019f6000-0000-7000-8000-%012d" % (50 + i) for i in range(n)]
+    assert manifest["metadata"]["source_block_ids"] == [f"019f6000-0000-7000-8000-{50 + i:012d}" for i in range(n)]
 
 
 def test_hard_cut_when_single_message_exceeds_chunk():
@@ -538,13 +562,15 @@ def test_hard_cut_when_single_message_exceeds_chunk():
 
 def test_golden_part_format_matches_distiller_parser(factory):
     p, c = factory("sess-golden", agent_context="primary")
-    p.on_pre_compress([
-        {"role": "user", "content": "Frage A"},
-        {"role": "tool", "content": "TOOLROW-MARKER must not appear"},
-        {"role": "assistant", "content": "Antwort B"},
-        {"role": "system", "content": "SYSPROMPT-MARKER"},
-        {"role": "assistant", "content": [{"type": "text", "text": "Liste C"}]},
-    ])
+    p.on_pre_compress(
+        [
+            {"role": "user", "content": "Frage A"},
+            {"role": "tool", "content": "TOOLROW-MARKER must not appear"},
+            {"role": "assistant", "content": "Antwort B"},
+            {"role": "system", "content": "SYSPROMPT-MARKER"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Liste C"}]},
+        ]
+    )
     part = _stores(c.calls)[0]
     assert part["title"].startswith("Compaction source sess-golden ")
     headers = PARSE_GO_HEADER.findall(part["content"])
@@ -556,12 +582,14 @@ def test_golden_part_format_matches_distiller_parser(factory):
 
 def test_synthetic_handoffs_and_summaries_excluded(factory):
     p, c = factory("sess-synth", agent_context="primary")
-    p.on_pre_compress([
-        {"role": "user", "content": "summary carrier", "_compressed_summary": True},
-        {"role": "assistant", "content": "[CONTEXT COMPACTION — REFERENCE ONLY] old summary"},
-        {"role": "assistant", "content": "<memory-context>recall</memory-context>"},
-        {"role": "user", "content": "echte Nachricht"},
-    ])
+    p.on_pre_compress(
+        [
+            {"role": "user", "content": "summary carrier", "_compressed_summary": True},
+            {"role": "assistant", "content": "[CONTEXT COMPACTION — REFERENCE ONLY] old summary"},
+            {"role": "assistant", "content": "<memory-context>recall</memory-context>"},
+            {"role": "user", "content": "echte Nachricht"},
+        ]
+    )
     body = _stores(c.calls)[0]["content"]
     assert "summary carrier" not in body and "old summary" not in body and "recall" not in body
     assert "### Message 4 — user\n\nechte Nachricht" in body
@@ -579,8 +607,12 @@ def test_redaction_host_and_upstream_rules(factory):
     p, c = factory("sess-redact", agent_context="primary")
     p.on_pre_compress([{"role": "user", "content": "Bitte merken:\n" + "\n".join(SECRETS)}])
     body = _stores(c.calls)[0]["content"]
-    for leaked in ("AbCdEf0123456789xyzSECRET", "eyJhbGciOiJIUzI1NiJ9.payload", "hunter2-very-secret",
-                   "sk-proj-Abcdefghijklmnopqrstuvwxyz0123456789ABCD"):
+    for leaked in (
+        "AbCdEf0123456789xyzSECRET",
+        "eyJhbGciOiJIUzI1NiJ9.payload",
+        "hunter2-very-secret",
+        "sk-proj-Abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+    ):
         assert leaked not in body
     assert "Bitte merken" in body
 
@@ -618,8 +650,10 @@ def test_budget_shared_with_required_facts(factory):
     p, c = factory("sess-budget2", config={"auto_compress_extract": True}, agent_context="primary")
     p._config["checkpoint_budget_s"] = 0.0
     with pytest.raises(CtxCheckpointError):
-        p.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}],
-                          require_checkpoint=True)
+        p.on_pre_compress(
+            [{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}],
+            require_checkpoint=True,
+        )
     assert _stores(c.calls) == []
 
 
@@ -668,8 +702,9 @@ def test_rate_limit_backoff_never_sleeps_past_budget(factory):
 
 
 def test_part_cap_refuses_before_any_request(factory):
-    p, c = factory("sess-cap", config={"checkpoint_chunk_chars": 1_000, "checkpoint_max_parts": 2},
-                   agent_context="primary")
+    p, c = factory(
+        "sess-cap", config={"checkpoint_chunk_chars": 1_000, "checkpoint_max_parts": 2}, agent_context="primary"
+    )
     with pytest.raises(CtxCheckpointError, match="checkpoint_max_parts"):
         p.on_pre_compress([{"role": "user", "content": "q" * 5_000}], require_checkpoint=True)
     assert c.calls == []
@@ -700,14 +735,17 @@ def test_checkpoint_chain_switch_independent_of_facts(factory):
     assert "ctx checkpoint head:" in p.on_pre_compress([{"role": "user", "content": "dev chain"}])
     assert len(_stores(c.calls)) == 3
     # chain off, facts on → no chain traffic at all
-    p2, c2 = factory("sess-dev2", config={"checkpoint_chain": False, "auto_compress_extract": True},
-                     agent_context="primary")
-    p2.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
+    p2, c2 = factory(
+        "sess-dev2", config={"checkpoint_chain": False, "auto_compress_extract": True}, agent_context="primary"
+    )
+    p2.on_pre_compress(
+        [{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}]
+    )
     p2.shutdown()
     assert all(a["category"] != CHAIN_CAT for a in _stores(c2.calls))
     assert not any(n == "search" for n, _ in c2.calls)
     # both off → required raises, best effort silent
-    p3, c3 = factory("sess-dev3", config={"checkpoint_chain": False}, agent_context="primary")
+    p3, _c3 = factory("sess-dev3", config={"checkpoint_chain": False}, agent_context="primary")
     assert p3.on_pre_compress([{"role": "user", "content": "x"}]) == ""
     with pytest.raises(CtxCheckpointError):
         p3.on_pre_compress([{"role": "user", "content": "x"}], require_checkpoint=True)
@@ -728,7 +766,9 @@ def test_best_effort_chain_failure_keeps_facts(factory, caplog):
 
     c.store_hook = hook
     with caplog.at_level(logging.WARNING, logger="ctx_plugin.provider"):
-        out = p.on_pre_compress([{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}])
+        out = p.on_pre_compress(
+            [{"role": "user", "content": "Der Proxy auf INFRA-WWW terminiert TLS fuer alle Dienste mit Traefik."}]
+        )
     p.shutdown()
     assert "Facts extracted" in out and "ctx checkpoint head" not in out
     assert any(a["category"] == "learnings" for a in _stores(c.calls))
@@ -750,11 +790,12 @@ def test_chaos_ctx_down_required_blocks_compaction(factory):
     # (the host then blocks compaction with BLOCKED_MISSING_PREREQUISITE and
     # keeps the uncompressed transcript) and must not publish a head.
     p, c = factory("sess-chaos", agent_context="primary")
+
     def _boom(args):
         raise ConnectionError("CTX unreachable (chaos test)")
+
     c.store_hook = _boom
-    msgs = [{"role": "user", "content": "Wichtige Anweisung"},
-            {"role": "assistant", "content": "Erledigt."}]
+    msgs = [{"role": "user", "content": "Wichtige Anweisung"}, {"role": "assistant", "content": "Erledigt."}]
     with pytest.raises(CtxCheckpointError, match="failed: ConnectionError"):
         p.on_pre_compress(msgs, require_checkpoint=True)
     # the failing part store was attempted, but no manifest/head was published
@@ -763,9 +804,15 @@ def test_chaos_ctx_down_required_blocks_compaction(factory):
 
 
 def test_required_receipt_contains_chain_and_facts_and_stays_under_host_cap(factory):
-    p, c = factory("sess-rcpt", config={"auto_compress_extract": True}, agent_context="primary")
-    msgs = [{"role": "assistant", "content": f"Fakt {i}: Der Dienst {i} auf INFRA-HOST-{i} nutzt Port {8000 + i} fuer die interne API mit TLS."}
-            for i in range(40)]
+    p, _c = factory("sess-rcpt", config={"auto_compress_extract": True}, agent_context="primary")
+    msgs = [
+        {
+            "role": "assistant",
+            "content": f"Fakt {i}: Der Dienst {i} auf INFRA-HOST-{i} nutzt Port {8000 + i} fuer die interne API "
+            "mit TLS.",
+        }
+        for i in range(40)
+    ]
     receipt = p.on_pre_compress(msgs, require_checkpoint=True)
     assert receipt.startswith("ctx checkpoint head: `")
     assert "CTX pre-compress receipt" in receipt
@@ -799,14 +846,18 @@ def test_wire_payload_of_real_client(monkeypatch):
         if req.full_url.endswith("/api/search"):
             return _Resp({"success": True, "results": []})
         n["i"] += 1
-        return _Resp({"success": True, "block": {"id": "019f6000-0000-7000-8000-%012d" % n["i"]}})
+        return _Resp({"success": True, "block": {"id": f"019f6000-0000-7000-8000-{n['i']:012d}"}})
 
     monkeypatch.setattr(client_mod.urllib.request, "urlopen", fake_urlopen)
     w = ChainWriter(client=client_mod.CtxClient("http://ctx.invalid", "k"), sensitivity="personal", api_timeout=10.0)
     r = w.write([{"role": "user", "content": "wire"}], root_session_id="r1", session_id="r1", budget_s=20)
     assert [s["url"].rsplit("/", 1)[1] for s in sent] == ["search", "store", "store", "store"]
-    assert sent[0]["body"] == {"query": "Compaction checkpoint head r1", "category": CHAIN_CAT,
-                               "types": ["checkpoint"], "limit": 10}
+    assert sent[0]["body"] == {
+        "query": "Compaction checkpoint head r1",
+        "category": CHAIN_CAT,
+        "types": ["checkpoint"],
+        "limit": 10,
+    }
     for s in sent[1:]:
         b = s["body"]
         assert b["type"] == "checkpoint" and b["sensitivity"] == "personal" and b["category"] == CHAIN_CAT
@@ -821,9 +872,16 @@ def test_config_defaults_and_coercion(tmp_path):
     cfg = load_ctx_config(str(tmp_path))
     assert cfg["checkpoint_chain"] is True and cfg["checkpoint_sensitivity"] == "personal"
     assert cfg["checkpoint_chunk_chars"] == 36_000 and cfg["checkpoint_max_parts"] == 80
-    (tmp_path / "ctx.json").write_text(json.dumps({
-        "checkpoint_chain": "false", "checkpoint_sensitivity": "bogus",
-        "checkpoint_chunk_chars": 999_999, "checkpoint_max_parts": 500}))
+    (tmp_path / "ctx.json").write_text(
+        json.dumps(
+            {
+                "checkpoint_chain": "false",
+                "checkpoint_sensitivity": "bogus",
+                "checkpoint_chunk_chars": 999_999,
+                "checkpoint_max_parts": 500,
+            }
+        )
+    )
     cfg = load_ctx_config(str(tmp_path))
     assert cfg["checkpoint_chain"] is False and cfg["checkpoint_sensitivity"] == "personal"
     assert cfg["checkpoint_chunk_chars"] == 40_000 and cfg["checkpoint_max_parts"] == 95

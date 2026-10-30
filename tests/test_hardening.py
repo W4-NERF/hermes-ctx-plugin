@@ -6,20 +6,24 @@ import json
 import logging
 
 import pytest
-
 from conftest import join_writes
+
 from ctx_plugin.client import store_action, store_block_id
 from ctx_plugin.config import derive_profile_name, merge_tags
 
 PROVIDER_LOGGER = "ctx_plugin.provider"
 
 FACTS_MSGS = [
-    {"role": "user", "content": f"Der Server srv{i} nutzt Port {8000 + i} fuer den Reverse-Proxy und das Monitoring-Backend."}
+    {
+        "role": "user",
+        "content": f"Der Server srv{i} nutzt Port {8000 + i} fuer den Reverse-Proxy und das Monitoring-Backend.",
+    }
     for i in range(3)
 ]
 
 
 # -- Profile name / tag derivation -----------------------------------------------
+
 
 @pytest.mark.parametrize(
     "home,expected",
@@ -70,25 +74,34 @@ def test_auto_hooks_send_origin_tags(make_provider):
 
 
 def test_base_home_maps_to_default_profile(make_provider):
-    p, client = make_provider(None)
+    p, _client = make_provider(None)
     assert p._profile == "default"
 
 
 def test_ctx_store_tool_merges_agent_tags(make_provider):
     p, client = make_provider("sysadmin")
-    out = json.loads(p.handle_tool_call("ctx_store", {
-        "category": "learnings", "title": "t", "content": "c", "tags": ["dns", "source:evil"],
-    }))
+    out = json.loads(
+        p.handle_tool_call(
+            "ctx_store",
+            {
+                "category": "learnings",
+                "title": "t",
+                "content": "c",
+                "tags": ["dns", "source:evil"],
+            },
+        )
+    )
     assert out["saved"] is True and out["id"] == "blk-0"
     assert client.calls[0]["tags"] == ["dns", "source:hermes", "profile:sysadmin", "hook:tool"]
 
 
 # -- Fact loop tolerance -----------------------------------------------------------
 
+
 def test_fact_loop_continues_after_failure(make_provider, caplog):
     p, client = make_provider(config={"facts_from_user": False})
-    client.fail_on = {0}      # first fact raises
-    client.reject_on = {1}    # second fact rejected by server (success: false)
+    client.fail_on = {0}  # first fact raises
+    client.reject_on = {1}  # second fact rejected by server (success: false)
     caplog.set_level(logging.DEBUG, logger=PROVIDER_LOGGER)
     summary_text = p.on_pre_compress(FACTS_MSGS)
     join_writes(p)
@@ -101,7 +114,7 @@ def test_fact_loop_continues_after_failure(make_provider, caplog):
 
 
 def test_fact_loop_all_ok_summary_is_info(make_provider, caplog):
-    p, client = make_provider(config={"facts_from_user": False})
+    p, _client = make_provider(config={"facts_from_user": False})
     caplog.set_level(logging.DEBUG, logger=PROVIDER_LOGGER)
     p.on_pre_compress(FACTS_MSGS)
     join_writes(p)
@@ -116,7 +129,7 @@ SECRET_CONTENT = "Geheimer Inhalt: Passwort hunter2 steht im Tresor, nicht logge
 
 
 def test_success_logged_at_info_with_hook_profile_action(make_provider, caplog):
-    p, client = make_provider("default")
+    p, _client = make_provider("default")
     caplog.set_level(logging.DEBUG, logger=PROVIDER_LOGGER)
     p.on_memory_write("add", "user", SECRET_CONTENT)
     join_writes(p)

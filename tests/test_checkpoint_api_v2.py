@@ -6,24 +6,28 @@ import json
 import threading
 
 import pytest
-
 from agent.memory_manager import MemoryManager, _accepts_require_checkpoint
 from agent.memory_provider import PRE_COMPRESS_CHECKPOINT_API_VERSION
 from conftest import FakeClient, join_writes
+
+from ctx_plugin.checkpoint import CtxCheckpointError, _negotiate_checkpoint_api
 from ctx_plugin.config import load_ctx_config
-from ctx_plugin.provider import (
-    CtxCheckpointError,
-    CtxMemoryProvider,
-    _negotiate_checkpoint_api,
-)
+from ctx_plugin.provider import CtxMemoryProvider
 
 EVIDENCE_FACT = "Der Reverse-Proxy auf HOST-WWW terminiert TLS fuer alle oeffentlichen Dienste mit Traefik v3."
 RAW_ONLY_FACT = "Tool-Ausgabe: der Container nginx-legacy lief mit Image-Version 1.2.3 und Port 8443 offen."
 
 RAW = [
-    {"role": "user", "content": "[CONTEXT COMPACTION] Zusammenfassung der bisherigen Arbeit mit vielen Details zum Stand.",
-     "_compressed_summary": True},
-    {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "terminal", "arguments": "{}"}}]},
+    {
+        "role": "user",
+        "content": "[CONTEXT COMPACTION] Zusammenfassung der bisherigen Arbeit mit vielen Details zum Stand.",
+        "_compressed_summary": True,
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "c1", "function": {"name": "terminal", "arguments": "{}"}}],
+    },
     {"role": "tool", "tool_call_id": "c1", "content": RAW_ONLY_FACT},
     {"role": "assistant", "content": RAW_ONLY_FACT},
     {"role": "user", "content": EVIDENCE_FACT},
@@ -74,6 +78,7 @@ def _spy_inputs(monkeypatch):
 
 # -- Version negotiation --------------------------------------------------------------
 
+
 def test_provider_declares_v2_and_host_detects_it(provider_factory):
     p, _ = provider_factory()
     assert PRE_COMPRESS_CHECKPOINT_API_VERSION == 2
@@ -105,6 +110,7 @@ def test_config_coercion_checkpoint_keys(tmp_path):
 
 
 # -- evidence_messages routing ------------------------------------------------------------
+
 
 def test_manager_hands_evidence_not_raw_to_v2_provider(provider_factory, monkeypatch):
     p, client = provider_factory({"facts_from_user": False})  # evidence = user turn
@@ -138,10 +144,12 @@ def test_evidence_kwarg_wins_and_unknown_kwargs_tolerated(provider_factory, monk
 
 # -- require_checkpoint=True (fail-closed, synchronous) -------------------------------------
 
+
 def test_memory_manager_accepts_provider_as_required_checkpoint_api_v2(provider_factory):
     p, client = provider_factory({"facts_from_user": False})  # evidence = user turn
-    receipt = _manager(p).on_pre_compress(RAW, evidence_messages=EVIDENCE, require_checkpoint=True,
-                                          checkpoint_api_version=2)
+    receipt = _manager(p).on_pre_compress(
+        RAW, evidence_messages=EVIDENCE, require_checkpoint=True, checkpoint_api_version=2
+    )
     # synchronous: store already happened, no background writer spawned
     assert p._write_thread is None
     assert len(client.calls) == 1
@@ -150,8 +158,9 @@ def test_memory_manager_accepts_provider_as_required_checkpoint_api_v2(provider_
 
 def test_required_checkpoint_without_facts_returns_nonempty_receipt(provider_factory):
     p, client = provider_factory()
-    receipt = _manager(p).on_pre_compress(RAW, evidence_messages=[{"role": "user", "content": "ok"}],
-                                          require_checkpoint=True)
+    receipt = _manager(p).on_pre_compress(
+        RAW, evidence_messages=[{"role": "user", "content": "ok"}], require_checkpoint=True
+    )
     assert receipt.strip() and "0 salient facts" in receipt
     assert client.calls == []
 
@@ -174,6 +183,7 @@ def test_required_checkpoint_raises_when_writes_disabled(provider_factory):
 
 
 # -- require_checkpoint=False stays async best effort ---------------------------------------
+
 
 def test_best_effort_is_async_and_does_not_block(provider_factory):
     p, client = provider_factory({"facts_from_user": False})  # evidence = user turn

@@ -6,8 +6,9 @@ Wire shapes verified live against the production instance (2026-08-03):
   NOTE the field is ``query``, NOT ``text`` (the server 400s on ``text``).
 - ``POST /api/store``  body: ``{"category", "title", "content", "sensitivity"?, "type"?, "tags"?}``
   (``tags`` list live-verified 2026-10-20; an upsert WITHOUT tags resets them to [])
-- ``POST /api/search`` body: ``{"query", "category"?, "tags"?, "types"?, "types_exclude"?, "limit"?}``  (compact, no LLM;
-  ``tags`` = any-of overlap ``tags && $n``; ``types_exclude`` opt-in bind parameter, server v5.x)
+- ``POST /api/search`` body: ``{"query", "category"?, "tags"?, "types"?, "types_exclude"?, "limit"?}``
+  (compact, no LLM; ``tags`` = any-of overlap ``tags && $n``; ``types_exclude`` opt-in bind parameter,
+  server v5.x)
 - ``POST /api/query`` also takes ``types_exclude`` (GottZ/ctx ``handler/query.go`` ``queryRequest``)
 - Read rows/sources carry ``type`` and ``"untrusted": true`` for foreign-text types
   (``checkpoint``, ``tool-evidence``, ``tool-overview``, ``insight`` — docs/api.md "Untrusted framing", V-11)
@@ -26,7 +27,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,24 @@ logger = logging.getLogger(__name__)
 # Closed rejection vocabulary of the CTX write surfaces (GottZ/ctx
 # go/internal/handler/errcode.go, rejectClass table; docs/api.md "/api/blob/*").
 REJECT_CODES = (
-    "unauthorized", "invalid_body", "missing_fields", "invalid_sensitivity", "invalid_encoding",
-    "scope_denied", "size_cap", "unknown_type", "reserved_type", "parent_required", "unknown_parent",
-    "reserved_category", "reserved_metadata", "provenance_protected", "unknown_action", "constraint",
-    "rate_limit", "internal",
+    "unauthorized",
+    "invalid_body",
+    "missing_fields",
+    "invalid_sensitivity",
+    "invalid_encoding",
+    "scope_denied",
+    "size_cap",
+    "unknown_type",
+    "reserved_type",
+    "parent_required",
+    "unknown_parent",
+    "reserved_category",
+    "reserved_metadata",
+    "provenance_protected",
+    "unknown_action",
+    "constraint",
+    "rate_limit",
+    "internal",
 )
 # Codes that are retried once (transient); everything else is permanent — repeating
 # the identical write yields the identical verdict.
@@ -53,7 +68,7 @@ class CtxApiError(Exception):
     machine-readable rejection code (``""`` when the answer carried none).
     """
 
-    def __init__(self, message: str, *, status: Optional[int] = None, code: str = ""):
+    def __init__(self, message: str, *, status: int | None = None, code: str = ""):
         super().__init__(message)
         self.status = status
         self.code = code or ""
@@ -85,7 +100,7 @@ def _parse_error_body(body: str) -> tuple:
     return response_code(parsed), (str(err) if err is not None else "")
 
 
-def store_action(resp: Dict[str, Any]) -> str:
+def store_action(resp: dict[str, Any]) -> str:
     """Classify a /api/store response as created/updated/noop (live-verified 2026-10-20).
 
     - identical content → ``{"action": "noop", "existing_id": ..., "reason": ...}``
@@ -107,7 +122,7 @@ def store_action(resp: Dict[str, Any]) -> str:
     return "stored" if resp.get("success") else "unknown"
 
 
-def store_block_id(resp: Dict[str, Any]) -> str:
+def store_block_id(resp: dict[str, Any]) -> str:
     if not isinstance(resp, dict):
         return ""
     block = resp.get("block")
@@ -134,8 +149,8 @@ class CtxClient:
     # -- low-level -----------------------------------------------------------
 
     def _request(
-        self, method: str, path: str, payload: Optional[Dict[str, Any]] = None, timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
+        self, method: str, path: str, payload: dict[str, Any] | None = None, timeout: float | None = None
+    ) -> dict[str, Any]:
         url = f"{self._base}{path}"
         headers = {
             "X-Context-Key": self._key,
@@ -145,7 +160,7 @@ class CtxClient:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         t = timeout if timeout is not None else self._timeout
-        last_error: Optional[CtxApiError] = None
+        last_error: CtxApiError | None = None
 
         for attempt in (0, 1):  # one retry on 429 (per-key write rate limit)
             try:
@@ -182,7 +197,7 @@ class CtxClient:
 
     # -- API -------------------------------------------------------------
 
-    def whoami(self) -> Dict[str, Any]:
+    def whoami(self) -> dict[str, Any]:
         return self._request("GET", "/api/whoami")
 
     def query(
@@ -191,9 +206,9 @@ class CtxClient:
         *,
         synthesize: bool = False,
         include_content: bool = True,
-        types_exclude: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"query": text, "synthesize": synthesize}
+        types_exclude: list[str] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"query": text, "synthesize": synthesize}
         if include_content:
             payload["include_content"] = True
         if types_exclude:
@@ -205,14 +220,14 @@ class CtxClient:
         self,
         text: str,
         *,
-        category: Optional[str] = None,
-        types_exclude: Optional[List[str]] = None,
-        tags: Optional[List[str]] = None,
-        types: Optional[List[str]] = None,
-        limit: Optional[int] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"query": text}
+        category: str | None = None,
+        types_exclude: list[str] | None = None,
+        tags: list[str] | None = None,
+        types: list[str] | None = None,
+        limit: int | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"query": text}
         if category:
             payload["category"] = category
         if tags:
@@ -230,22 +245,23 @@ class CtxClient:
         category: str,
         title: str,
         content: str,
-        sensitivity: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        sensitivity: str | None = None,
+        tags: list[str] | None = None,
         *,
-        type: Optional[str] = None,  # noqa: A002 — wire name
-        parent_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        type: str | None = None,
+        parent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         if metadata:
             for key in RESERVED_METADATA_KEYS:
                 if key in metadata:
                     raise CtxApiError(
                         f"metadata key '{key}' is server-owned (rejected client-side)",
-                        status=None, code="reserved_metadata",
+                        status=None,
+                        code="reserved_metadata",
                     )
-        payload: Dict[str, Any] = {"category": category, "title": title, "content": content}
+        payload: dict[str, Any] = {"category": category, "title": title, "content": content}
         if sensitivity:
             payload["sensitivity"] = sensitivity
         if tags is not None:
@@ -258,11 +274,11 @@ class CtxClient:
             payload["metadata"] = dict(metadata)
         return self._request("POST", "/api/store", payload, timeout=timeout)
 
-    def get_block(self, block_id: str, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def get_block(self, block_id: str, timeout: float | None = None) -> dict[str, Any]:
         # Live-verified v4.x contract (2026-08-13): /api/manage expects "id" at
         # top level; the nested data.id form is rejected with
         # "Missing required field: id". Fall back for older server versions.
-        payload: Dict[str, Any] = {"action": "get", "id": block_id}
+        payload: dict[str, Any] = {"action": "get", "id": block_id}
         try:
             return self._request("POST", "/api/manage", payload, timeout=timeout)
         except CtxApiError as exc:

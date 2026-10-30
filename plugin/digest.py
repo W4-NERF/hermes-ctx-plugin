@@ -22,14 +22,15 @@ import sqlite3
 import tempfile
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from .config import FACT_STATE_DIR, _safe_root
 
 logger = logging.getLogger(__name__)
 
-DIGEST_FP_MAX = 4000            # fingerprints kept per root (FIFO)
+DIGEST_FP_MAX = 4000  # fingerprints kept per root (FIFO)
 _CARRIER_PREFIXES = ("[CONTEXT COMPACTION", "[PRIOR CONTEXT")
 _LINEAGE_MAX_HOPS = 500
 
@@ -37,7 +38,7 @@ _LINEAGE_MAX_HOPS = 500
 # -- Messages ------------------------------------------------------------------------
 
 
-def is_carrier(message: Dict[str, Any]) -> bool:
+def is_carrier(message: dict[str, Any]) -> bool:
     """Compaction summary carrier (never digest material, never the intent)."""
     if message.get("_compressed_summary"):
         return True
@@ -45,9 +46,9 @@ def is_carrier(message: Dict[str, Any]) -> bool:
     return isinstance(content, str) and content.lstrip().startswith(_CARRIER_PREFIXES)
 
 
-def text_exchanges(messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def text_exchanges(messages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """user/assistant messages with text, without compaction carriers (pre-P5 unit + carrier filter)."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for m in messages or []:
         if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
             continue
@@ -58,7 +59,7 @@ def text_exchanges(messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, A
     return out
 
 
-def message_fp(message: Dict[str, Any]) -> str:
+def message_fp(message: dict[str, Any]) -> str:
     raw = f"{message.get('role')}\x00{str(message.get('content') or '').strip()}"
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:20]
 
@@ -76,8 +77,8 @@ class DigestState:
         self.lock = threading.RLock()
         self.segment = 0
         self.last_digest_ts = 0.0
-        self.since_ts = time.time()      # reference for the time-based rolling digest
-        self._fps: List[str] = []
+        self.since_ts = time.time()  # reference for the time-based rolling digest
+        self._fps: list[str] = []
         self._fp_set: set = set()
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -94,11 +95,11 @@ class DigestState:
         except Exception:
             logger.debug("CTX digest state unreadable: %s", self.path, exc_info=True)
 
-    def new_exchanges(self, messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def new_exchanges(self, messages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         with self.lock:
             return [m for m in text_exchanges(messages) if message_fp(m) not in self._fp_set]
 
-    def claim(self, messages: Iterable[Dict[str, Any]]) -> int:
+    def claim(self, messages: Iterable[dict[str, Any]]) -> int:
         """Reserve the next segment number and mark ``messages`` as digested. Returns the segment."""
         with self.lock:
             self.segment += 1
@@ -111,12 +112,12 @@ class DigestState:
                     self._fps.append(fp)
                     self._fp_set.add(fp)
             if len(self._fps) > self.max_fps:
-                self._fps = self._fps[-self.max_fps:]
+                self._fps = self._fps[-self.max_fps :]
                 self._fp_set = set(self._fps)
             self._save()
             return self.segment
 
-    def release(self, messages: Iterable[Dict[str, Any]]) -> None:
+    def release(self, messages: Iterable[dict[str, Any]]) -> None:
         """Store failed → the messages count again for the next trigger (segment number stays used)."""
         with self.lock:
             drop = {message_fp(m) for m in messages}
@@ -127,8 +128,14 @@ class DigestState:
     def _save(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"root": self.root, "segment": self.segment, "last_digest_ts": self.last_digest_ts,
-                       "since_ts": self.since_ts, "fps": self._fps, "updated": time.time()}
+            payload = {
+                "root": self.root,
+                "segment": self.segment,
+                "last_digest_ts": self.last_digest_ts,
+                "since_ts": self.since_ts,
+                "fps": self._fps,
+                "updated": time.time(),
+            }
             fd, tmp = tempfile.mkstemp(prefix=".digest-", dir=str(self.path.parent))
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -148,7 +155,7 @@ class DigestState:
 # -- Stable root session (host lineage, read-only) --------------------------------------
 
 
-def _fork_child(row: Dict[str, Any], *, include_reset: bool = False) -> bool:
+def _fork_child(row: dict[str, Any], *, include_reset: bool = False) -> bool:
     """Mirror of ``SessionDB._is_explicit_fork_child_row`` (branch/delegate/tool child)."""
     if row.get("source") == "tool":
         return True
@@ -186,10 +193,10 @@ def resolve_lineage_root(hermes_home: str, session_id: str) -> str:
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
         con.row_factory = sqlite3.Row
 
-        def _get(row_id: str) -> Optional[Dict[str, Any]]:
+        def _get(row_id: str) -> dict[str, Any] | None:
             row = con.execute(
-                "SELECT id, source, parent_session_id, end_reason, model_config FROM sessions WHERE id = ?",
-                (row_id,)).fetchone()
+                "SELECT id, source, parent_session_id, end_reason, model_config FROM sessions WHERE id = ?", (row_id,)
+            ).fetchone()
             return dict(row) if row else None
 
         row = _get(sid)
@@ -222,7 +229,7 @@ def resolve_lineage_root(hermes_home: str, session_id: str) -> str:
 # -- Pruning -------------------------------------------------------------------------------
 
 
-def prune_state_dir(hermes_home: str, max_age_days: float, *, now: Optional[float] = None) -> int:
+def prune_state_dir(hermes_home: str, max_age_days: float, *, now: float | None = None) -> int:
     """Delete ``ctx_state`` files (ledgers, digest states, stale temp files) not modified for
     ``max_age_days``. 0/negative = off. Returns the number of removed files. Never raises."""
     if not hermes_home or not max_age_days or max_age_days <= 0:
