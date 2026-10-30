@@ -64,6 +64,10 @@ DROP_CASES = [
     ),
     ("Your request was not processed. Send it again if you still want me to carry it out.", "compaction-marker"),
     (
+        "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+        "harness-warning",
+    ),
+    (
         "Operation interrupted: waiting for model response (12.3s elapsed). Der letzte Schritt wurde nicht beendet.",
         "compaction-marker",
     ),
