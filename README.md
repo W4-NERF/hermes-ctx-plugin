@@ -75,7 +75,8 @@ hermes plugins install W4-NERF/hermes-ctx-plugin/plugin
 Answer *yes* to "Use 'ctx' as the memory provider now?" (or run `hermes memory setup`
 later). Manual alternative: copy `plugin/` to `$HERMES_HOME/plugins/ctx/` (per profile,
 e.g. `~/.hermes/plugins/ctx/` or `~/.hermes/profiles/<name>/plugins/ctx/`). The
-directory name must be `ctx`.
+directory name must be `ctx`. Do not put a `pyproject.toml` into the installed plugin
+directory: older Hermes plugin managers auto-disable such a plugin (see CHANGELOG 1.7.1).
 
 ## Setup
 
@@ -351,7 +352,8 @@ checkout's Python environment:
 HERMES_REPO=~/.hermes/hermes-agent ~/.hermes/hermes-agent/.venv/bin/python -m pytest
 ```
 
-Lint and format (configuration in `pyproject.toml`):
+Lint and format (configuration in `ruff.toml`; pytest in `pytest.ini` — deliberately no
+`pyproject.toml`, see CHANGELOG 1.7.1):
 
 ```bash
 ruff check . && ruff format --check .

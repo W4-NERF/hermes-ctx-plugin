@@ -476,6 +476,7 @@ _TRANSIENT = re.compile(
 # the leading "⚠"/emoji is skipped by ``^\W*``.
 _HARNESS_START = re.compile(
     r"^\W*(?:stream stalled\b|your request was not processed\b|operation interrupted\b|"
+    r"this turn did not complete\b|"
     r"the action was not (?:executed|run|performed|carried out)\b)",
     re.IGNORECASE,
 )

@@ -3,6 +3,21 @@
 All notable changes to the CTX memory provider. Versions follow `plugin/plugin.yaml`.
 Internal phase names (P1–P6) refer to the ctx-plugin-v2 work packages.
 
+## [1.7.1] — 2026-10-30
+
+### Fixed
+- Fact noise filter: the host notice "This turn did not complete. Some actions may already
+  have run …" is now rejected as `harness-warning` instead of being stored as a `learnings`
+  fact.
+
+### Changed
+- Dev-tooling configuration moved from `pyproject.toml` to `ruff.toml` and `pytest.ini`; the
+  repository no longer ships a `pyproject.toml`. Hermes' plugin manager (before
+  NousResearch/hermes-agent@ffe2f6411) turns every plugin directory that contains a
+  `pyproject.toml` into a uv workspace member, injects a `[project]` table without `version`,
+  `uv lock` fails and the plugin is auto-disabled — `memory.provider` is cleared in every
+  profile. Installs that copied the whole repository instead of `plugin/` were hit by this.
+
 ## [1.7.0] — 2026-10-29
 
 ### Fixed
