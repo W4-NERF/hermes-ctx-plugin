@@ -3,6 +3,15 @@
 All notable changes to the CTX memory provider. Versions follow `plugin/plugin.yaml`.
 Internal phase names (P1–P6) refer to the ctx-plugin-v2 work packages.
 
+## Deprecated — 2026-11-02
+
+This repository is retired. The memory engine was contributed upstream to
+[GottZ/ctx](https://github.com/GottZ/ctx) and is maintained there as the memory layer
+of `ctx_checkpoint` (since ctx v5.29.0 / plugin 0.6.0). No further versions are cut
+here; `1.7.1` is the last. Install
+[`ctx_checkpoint`](https://hermes-agent.nousresearch.com/docs/plugins/ctx_checkpoint)
+with `hermes plugins install ctx_checkpoint` instead.
+
 ## [1.7.1] — 2026-10-30
 
 ### Fixed

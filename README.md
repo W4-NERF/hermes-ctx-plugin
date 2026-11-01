@@ -1,4 +1,31 @@
-# CTX Memory Provider for Hermes Agent
+# CTX Memory Provider for Hermes Agent — **DEPRECATED**
+
+> [!WARNING]
+> **Deprecated: this repository is no longer maintained.**
+> The memory engine in [`plugin/`](plugin/) was contributed upstream to
+> [GottZ/ctx](https://github.com/GottZ/ctx) and has been maintained there since
+> **ctx v5.29.0 / plugin 0.6.0 (October 2026)** as the memory layer of
+> [`ctx_checkpoint`](https://github.com/GottZ/ctx/blob/root/integrations/hermes/README.md) —
+> one plugin, two layers: the checkpoint chain (always on) plus the memory layer
+> (`memory: true`: recall, `ctx_*` tools, memory mirror, fact extraction, digests, CLI).
+>
+> **Recommended install — from the Hermes plugin catalog:**
+>
+> ```bash
+> hermes plugins install ctx_checkpoint   # answer y: use it as the memory provider
+> hermes memory setup ctx_checkpoint      # asks for the CTX URL and API key
+> hermes plugins update ctx_checkpoint    # later: follow the current catalog pin
+> ```
+>
+> Catalog entry: [hermes-agent.nousresearch.com/docs/plugins/ctx_checkpoint](https://hermes-agent.nousresearch.com/docs/plugins/ctx_checkpoint)
+> · Full guide: [GottZ/ctx → integrations/hermes](https://github.com/GottZ/ctx/blob/root/integrations/hermes/README.md)
+>
+> For code newer than the catalog pin (or a Hermes without catalog access), use a ctx
+> checkout: `scripts/install.sh` from [GottZ/ctx](https://github.com/GottZ/ctx).
+>
+> This repository stays public for history only. The code here is not updated, and
+> issues/pull requests are not handled. Do not install
+> `W4-NERF/hermes-ctx-plugin/plugin` any more — it is the pre-merge snapshot (1.7.1).
 
 [CTX](https://github.com/GottZ/ctx) is a self-hosted knowledge store with a hybrid
 retrieval pipeline (semantic + fulltext + trigram RRF, temporal gravity, Dream-mode
@@ -65,7 +92,13 @@ quality ("memory drift"). `sync_turn` only counts exchanges for the digest trigg
 
 ## Installation
 
-The provider is the [`plugin/`](plugin/) directory of this repository. Install it as a
+> **Deprecated.** Install [`ctx_checkpoint`](https://hermes-agent.nousresearch.com/docs/plugins/ctx_checkpoint)
+> from the Hermes plugin catalog instead — `hermes plugins install ctx_checkpoint` —
+> or a ctx checkout's `scripts/install.sh`. See the banner at the top of this README.
+> The instructions below describe the retired standalone plugin and are kept for
+> historical reference only.
+
+The provider was the [`plugin/`](plugin/) directory of this repository, installed as a
 user plugin named `ctx`:
 
 ```bash
